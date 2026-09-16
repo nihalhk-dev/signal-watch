@@ -1,0 +1,30 @@
+﻿# datos: nunca se versionan, se regeneran
+data/raw/**
+data/processed/**
+data/gold/**
+!data/**/.gitkeep
+!data/README.md
+# salidas
+outputs/figures/**
+outputs/reports/**
+outputs/audit/**
+!outputs/**/.gitkeep
+# outputs/tables/ SI se versiona: es la evidencia
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+# notebooks
+.ipynb_checkpoints/
+# entorno
+.env
+.DS_Store

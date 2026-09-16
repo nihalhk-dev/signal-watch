@@ -1,0 +1,127 @@
+# ══════════════════════════════════════════════════════════════════════
+#  Signal Watch — configuración única del proyecto
+#  Todo (paquete, deps, lint, tipos, tests, cobertura) vive AQUÍ.
+#  Regla del manual F0: una hora aquí ahorra tres días después.
+# ══════════════════════════════════════════════════════════════════════
+
+# ---- 1. Sistema de construcción -------------------------------------
+# setuptools es el backend aburrido y universal. Cualquiera que clone
+# el repo lo tiene: no obliga a instalar Poetry/PDM/uv para empezar.
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# ---- 2. Metadatos del paquete ---------------------------------------
+[project]
+name = "signal-watch"
+version = "0.1.0"
+description = "Detección secuencial de degradación de rendimiento en modelos financieros"
+readme = "README.md"
+requires-python = ">=3.12"          # 3.12: wheels para todo el stack + es lo que sirve Streamlit Cloud
+license = { text = "MIT" }          # revisa el reglamento de tu TFM antes de fijarla
+authors = [{ name = "Nihal H.K", email = "nihalhk.dev@gmail.com" }]
+keywords = ["change-detection", "cusum", "model-monitoring", "mrm", "drift"]
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+]
+
+# ---- 3. Dependencias de EJECUCIÓN -----------------------------------
+# Rangos con límite superior, no versiones exactas. Motivo:
+#   · el límite inferior asegura las funciones que usas
+#   · el límite superior evita que una major nueva rompa la reproducibilidad
+#   · el pin EXACTO va en requirements.txt (pip freeze contra tu entorno real)
+# Esta lista es el MÍNIMO de F0-F4. Las de crédito (scikit-learn) se
+# añaden en F7, no antes: no metas lo que aún no usas.
+dependencies = [
+    "numpy>=1.26,<3",
+    "pandas>=2.1,<3",
+    "scipy>=1.11,<2",           # distribuciones para la nula del PSI (ADR-0008) y ARL
+    "pyarrow>=14",              # el motor Parquet de todo data/gold
+    "pydantic>=2.5,<3",         # Settings + validación del contrato metric_stream
+    "pyyaml>=6",                # configs/*.yaml
+    "matplotlib>=3.8,<4",       # reporting/figures.py (R9)
+    "typer>=0.9,<1",            # cli.py — subcomandos con tipos
+]
+
+[project.optional-dependencies]
+# Herramientas de desarrollo. Se instalan con: pip install -e ".[dev]"
+dev = [
+    "ruff>=0.6",                # lint + formato en una sola herramienta (reemplaza black+isort+flake8)
+    "mypy>=1.8",
+    "pytest>=8",
+    "pytest-cov>=5",
+    "pre-commit>=3.5",
+    "nbstripout>=0.7",          # limpia outputs de notebooks antes del commit (R6/R9)
+]
+
+# ---- 4. El comando `signal-watch` -----------------------------------
+# Esto es lo que hace que `signal-watch version` exista tras pip install.
+# Apunta a la función app() de Typer en cli.py.
+[project.scripts]
+signal-watch = "signal_watch.cli:app"
+
+[project.urls]
+Repository = "https://github.com/nihalhk-dev/signal-watch-"   # ajusta al slug real
+
+# ---- 5. Dónde está el código (src layout) ---------------------------
+# El paquete vive en src/. Consecuencia clave: los tests corren contra
+# el paquete INSTALADO, no contra el cwd. Si olvidas declarar un módulo,
+# el test falla — no lo "encuentra por casualidad".
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+# Empaqueta el marcador de tipos y las plantillas Jinja del informe MRM.
+signal_watch = ["py.typed", "reporting/templates/*"]
+
+# ══════════════════════════════════════════════════════════════════════
+#  Herramientas — todas configuradas aquí, no en ficheros sueltos
+# ══════════════════════════════════════════════════════════════════════
+
+# ---- Ruff: lint + formato -------------------------------------------
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py312"
+
+[tool.ruff.lint]
+# Conjunto de reglas deliberado, no "todas":
+#   E,W pycodestyle · F pyflakes · I imports · N nombres · UP moderniza
+#   B bugbear (bugs sutiles) · SIM simplifica · RUF reglas propias de ruff
+select = ["E", "W", "F", "I", "N", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]   # la longitud la gobierna el formateador, no el linter
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["N802"]   # nombres de test descriptivos pueden romper la convención
+
+# ---- Mypy: tipado estricto donde importa ----------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true                      # el listón alto: es señal de rigor para un validador
+warn_unreachable = true
+plugins = ["pydantic.mypy"]        # que mypy entienda los modelos de Pydantic
+
+[[tool.mypy.overrides]]
+# Librerías científicas sin stubs completos: no rompas el build por ellas.
+module = ["scipy.*", "matplotlib.*", "pyarrow.*"]
+ignore_missing_imports = true
+
+# ---- Pytest ---------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Marcadores: separan los tests rápidos de los lentos y los de metodología.
+markers = [
+    "slow: pruebas lentas (calibración, curvas de retardo)",
+    "methodology: los tests que un validador independiente escribiría (R2,R4,R5)",
+]
+addopts = "-ra --strict-markers"   # --strict-markers: un marcador con typo es un error, no un silencio
+
+# ---- Cobertura ------------------------------------------------------
+[tool.coverage.run]
+source = ["signal_watch"]
+branch = true                      # mide ramas, no solo líneas
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if __name__ == .__main__.:", "raise NotImplementedError"]
