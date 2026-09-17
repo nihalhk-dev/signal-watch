@@ -22,6 +22,7 @@ from signal_watch.gold.schemas import Direction, MetricObservation
 from signal_watch.synthetic.generator import generar_ruido_ar1
 from signal_watch.synthetic.metrics import (
     clip_auc,
+    clip_psi,
     generar_psi_desde_chi2,
     inyectar_cambio_psi,
     se_hanley_mcneil,
@@ -120,6 +121,20 @@ def _generar_stream_psi(cfg: EscenarioConfig) -> tuple[list[MetricObservation], 
         # real de la distribución, nunca "saltar hacia abajo")
         incremento = abs(cfg.delta_sigma) * 0.1
         valores = inyectar_cambio_psi(valores, cfg.tau, incremento)
+    elif cfg.escenario == "cambio_varianza" and cfg.tau is not None:
+        # El PSI no tiene una "media" separable de su "varianza" como el
+        # AUC (ya es, por construcción, una medida de dispersión entre
+        # histogramas). Lo interpretamos como una deriva MÁS INESTABLE:
+        # el mismo incremento sostenido de "salto"/"deriva", pero con
+        # ruido adicional alrededor a partir de tau, simulando una
+        # distribución que no solo se aleja sino que fluctúa más.
+        incremento = abs(cfg.delta_sigma) * 0.1
+        valores = inyectar_cambio_psi(valores, cfg.tau, incremento)
+        # ruido extra apreciable frente al ruido base de chi2, para que
+        # la mayor inestabilidad sea real y medible, no solo nominal
+        ruido_extra = rng.chisquare(df=3, size=cfg.n - cfg.tau) * 0.15
+        valores[cfg.tau :] += ruido_extra
+        valores = clip_psi(valores)
     elif cfg.escenario == "sin_cambio":
         pass  # ya generado bajo H0, sin tocar
     else:
