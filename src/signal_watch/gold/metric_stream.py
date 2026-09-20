@@ -151,10 +151,13 @@ def load_ground_truth(path: Path | str) -> list[GroundTruth]:
         raise SchemaViolationError(f"No encuentro el ground truth: {path}")
     df = pd.read_parquet(path)
     return [
-        GroundTruth(stream_id=row["stream_id"], tau=row["tau"], escenario=row["escenario"])
+        GroundTruth(
+            stream_id=row["stream_id"],
+            tau=None if pd.isna(row["tau"]) else int(row["tau"]),
+            escenario=row["escenario"],
+        )
         for _, row in df.iterrows()
     ]
-
 
 # ── LA MURALLA ─────────────────────────────────────────────────────────
 
