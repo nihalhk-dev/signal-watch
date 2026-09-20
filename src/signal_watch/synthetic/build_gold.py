@@ -8,6 +8,15 @@ banco de pruebas" con una sola llamada, combinando:
   · scenarios.aplicar_*()               — el tipo de cambio inyectado
   · metrics.generar_auc_realista() /
     metrics.generar_psi_desde_chi2()   — la semántica real de la métrica
+
+CONVENIO DE SIGNO (importante, y fuente de un bug real en su momento):
+  `delta_sigma` es una MAGNITUD, siempre positiva. El SIGNO lo pone
+  quien construye la serie, porque solo ahí se sabe la `direction` de
+  la métrica:
+    · LOWER_IS_WORSE (AUC): degradar = BAJAR  -> se pasa -delta_sigma
+    · HIGHER_IS_WORSE (PSI): degradar = SUBIR -> se suma +incremento
+  Las funciones de scenarios.py son agnósticas: desplazan por la
+  cantidad con signo que reciban. No saben ni deben saber qué es "peor".
 """
 
 from __future__ import annotations
@@ -46,7 +55,8 @@ class EscenarioConfig:
     escenario: str  # "salto", "deriva", "cambio_varianza", "sin_cambio"
     n: int  # número de periodos
     tau: int | None  # instante del cambio (None si escenario="sin_cambio")
-    delta_sigma: float  # magnitud del cambio, en unidades de sigma
+    delta_sigma: float  # MAGNITUD del cambio en unidades de sigma (sin signo:
+    #                     el signo lo aplica _generar_stream_* según direction)
     rho: float  # memoria del AR(1)
     n_obs_base: int  # tamaño de muestra típico de cada periodo
     seed: int  # semilla — misma semilla, misma serie SIEMPRE
@@ -61,11 +71,20 @@ def _generar_stream_auc(cfg: EscenarioConfig) -> tuple[list[MetricObservation], 
     ruido = generar_ruido_ar1(cfg.n, cfg.rho, sigma, rng)
     valores = mu_base + ruido
 
+    # SIGNO NEGATIVO, a propósito: el AUC es LOWER_IS_WORSE, así que
+    # degradación = el AUC BAJA. delta_sigma llega como magnitud positiva
+    # (DELTAS_SIGMA en build_synthetic.py), y aquí se convierte en un
+    # desplazamiento hacia abajo. Sin este signo, el banco inyectaba una
+    # MEJORA del modelo mientras el CUSUM(LOWER_IS_WORSE) vigilaba caídas:
+    # el detector miraba al lado contrario del cambio y no había nada
+    # que detectar (los ARL1 medidos no eran retardos, eran censura).
     if cfg.escenario == "salto" and cfg.tau is not None:
-        valores = aplicar_salto(valores, cfg.tau, cfg.delta_sigma, sigma)
+        valores = aplicar_salto(valores, cfg.tau, -cfg.delta_sigma, sigma)
     elif cfg.escenario == "deriva" and cfg.tau is not None:
-        valores = aplicar_deriva(valores, cfg.tau, cfg.delta_sigma, sigma)
+        valores = aplicar_deriva(valores, cfg.tau, -cfg.delta_sigma, sigma)
     elif cfg.escenario == "cambio_varianza" and cfg.tau is not None:
+        # este escenario no tiene dirección: añade ruido simétrico, la
+        # media no se mueve. Por eso no lleva signo.
         rng_var = np.random.default_rng(cfg.seed + 1)
         valores = aplicar_cambio_varianza(valores, cfg.tau, factor_varianza=4.0, rng=rng_var)
     elif cfg.escenario == "sin_cambio":
@@ -73,7 +92,11 @@ def _generar_stream_auc(cfg: EscenarioConfig) -> tuple[list[MetricObservation], 
     else:
         raise ValueError(f"Combinación inválida: escenario={cfg.escenario}, tau={cfg.tau}")
 
-    # dar semántica real de AUC: recortar al rango válido y calcular SE
+    # dar semántica real de AUC: recortar al rango válido y calcular SE.
+    # NOTA: con delta_sigma=3.0 el recorte contra el suelo 0.5 afecta a
+    # ~15% de las observaciones post-tau (un AUC por debajo de 0.5 es
+    # peor que el azar, así que el suelo es correcto — pero comprime algo
+    # la magnitud efectiva del delta más grande). Va a limitaciones.
     valores = clip_auc(valores)
     n_obs_serie = rng.integers(
         low=max(1, int(cfg.n_obs_base * 0.7)),
@@ -110,16 +133,29 @@ def _generar_stream_psi(cfg: EscenarioConfig) -> tuple[list[MetricObservation], 
         high=int(cfg.n_obs_base * 1.3) + 1,
         size=cfg.n,
     )
+    n_obs_para_psi = int(np.mean(n_obs_serie))
     # PSI bajo H0: usamos el n_obs medio de la serie para la escala
     valores = generar_psi_desde_chi2(
-        n=cfg.n, n_bins=n_bins, n_obs=int(np.mean(n_obs_serie)), rng=rng
+        n=cfg.n, n_bins=n_bins, n_obs=n_obs_para_psi, rng=rng
     )
 
+    # sigma "natural" del PSI bajo H0 (misma formula que usa
+    # generar_psi_desde_chi2 internamente). delta_sigma=1.0 pasa a
+    # significar "un salto del tamaño del ruido de muestreo propio de
+    # la metrica" -- exactamente el mismo criterio que usa AUC con su
+    # sigma=0.05 fijo. Antes se usaba una constante absoluta (0.1) sin
+    # relacion con el ruido real, y por eso CUSUM detectaba cualquier
+    # magnitud en un solo paso (delta de 10-57 sigmas reales).
+    df = n_bins - 1
+    sigma_psi = np.sqrt(2 * df) / n_obs_para_psi
+
+    # SIGNO POSITIVO, a propósito: el PSI es HIGHER_IS_WORSE, así que
+    # degradación = el PSI SUBE. Es el caso simétrico del AUC de arriba.
     if cfg.escenario in ("salto", "deriva") and cfg.tau is not None:
         # para el PSI, "salto" y "deriva" se traducen en un incremento
         # sostenido a partir de tau (el PSI solo puede subir con deriva
         # real de la distribución, nunca "saltar hacia abajo")
-        incremento = abs(cfg.delta_sigma) * 0.1
+        incremento = abs(cfg.delta_sigma) * sigma_psi
         valores = inyectar_cambio_psi(valores, cfg.tau, incremento)
     elif cfg.escenario == "cambio_varianza" and cfg.tau is not None:
         # El PSI no tiene una "media" separable de su "varianza" como el
@@ -128,11 +164,10 @@ def _generar_stream_psi(cfg: EscenarioConfig) -> tuple[list[MetricObservation], 
         # el mismo incremento sostenido de "salto"/"deriva", pero con
         # ruido adicional alrededor a partir de tau, simulando una
         # distribución que no solo se aleja sino que fluctúa más.
-        incremento = abs(cfg.delta_sigma) * 0.1
+        incremento = abs(cfg.delta_sigma) * sigma_psi
         valores = inyectar_cambio_psi(valores, cfg.tau, incremento)
         # ruido extra apreciable frente al ruido base de chi2, para que
         # la mayor inestabilidad sea real y medible, no solo nominal
-        #ruido_extra = rng.chisquare(df=3, size=cfg.n - cfg.tau) * 0.15
         ruido_extra = rng.chisquare(df=3, size=cfg.n - cfg.tau) * 0.0015  # ÷100, misma proporcion que antes del fix del Bug 1
         valores[cfg.tau :] += ruido_extra
         valores = clip_psi(valores)

@@ -6,18 +6,30 @@ disparar, en promedio, en dos regímenes distintos:
   · ARL1 — bajo H1 (streams con cambio real): cuánto tarda en detectar
     el cambio DESDE que ocurre tau. Cuanto más bajo, mejor (detecta rápido).
 
-Esta es la pieza que, aplicada sobre el banco de pruebas real (320.000
-observaciones, calibration.py ya usó una versión simplificada de esto
-para calibrar h), produce el número que se compara en la curva de
-retardo vs. falsas alarmas (delay_curves.py) — el resultado central
-del proyecto.
+Esta es la pieza que, aplicada sobre el banco de pruebas real, produce
+el número que se compara en la curva de retardo vs. falsas alarmas
+(delay_curves.py) — el resultado central del proyecto.
 
-Nota sobre censura: no todo stream produce una alarma dentro de su
-longitud. Un run "censurado" (el detector nunca disparó) no se descarta
-—descartarlo sesgaría el ARL0 hacia abajo, porque justo los runs más
-tranquilos (los que MÁS tardan) son los que se censuran—. Se cuenta como
-"al menos tantos pasos como duró la serie", siguiendo la misma convención
-conservadora que ya se usó en calibration.py.
+CONVENIO DE LONGITUD DE RACHA:
+  El "tiempo hasta la alarma" es el número de observaciones CONSUMIDAS,
+  no el índice de la observación. Una alarma en la primera observación
+  (índice 0) es una racha de longitud 1, no 0. Esto lo hace consistente
+  con el caso censurado, que siempre valió len(observaciones). Sin esta
+  consistencia, el ARL0 quedaba subestimado en exactamente 1 unidad.
+
+DOS FORMAS DE "NO DETECTAR", Y POR QUÉ SE CUENTAN APARTE:
+  · Censura: el detector nunca alarmó dentro de la serie. No se descarta
+    —descartarla sesgaría el ARL hacia abajo, porque justo las rachas
+    más largas son las que se censuran—. Se cuenta como "al menos tantos
+    pasos como duró la serie".
+  · Alarma pre-tau (solo en ARL1): el detector alarmó ANTES de que el
+    cambio ocurriera. No es una detección del cambio, así que no puede
+    entrar en la media del retardo. PERO tampoco es gratis: es una falsa
+    alarma, y su frecuencia es un COSTE real del punto de operación.
+    Por eso se cuenta y se devuelve (n_excluidos_por_alarma_temprana)
+    en vez de descartarse en silencio: sin ese número, cada punto de la
+    curva estaría calculado sobre una submuestra distinta, seleccionada
+    por el propio detector, y los retardos no serían comparables entre sí.
 """
 
 from __future__ import annotations
@@ -36,18 +48,24 @@ class ResultadoARL:
     """El resultado de medir un ARL (0 o 1) sobre un conjunto de streams.
 
     arl: la media de los tiempos hasta la alarma (o hasta el final de
-         la serie, si nunca alarmó — censurado).
+         la serie, si nunca alarmó — censurado). nan si no quedó ningún
+         stream utilizable.
     error_estandar: el error estándar de esa media, para poder reportar
                      un intervalo de confianza, no solo un número suelto.
-    n_streams: cuántos streams se usaron para la medición.
+    n_streams: cuántos streams entraron realmente en la media.
     n_censurados: cuántos de ellos NUNCA dispararon dentro de su longitud
                    (el ARL real podría ser aún mayor de lo medido).
+    n_excluidos_por_alarma_temprana: solo en ARL1 — cuántos streams se
+                   quedaron FUERA de la media porque el detector alarmó
+                   antes de tau. Es la tasa de falsa alarma pre-cambio,
+                   y hay que reportarla junto al retardo SIEMPRE.
     """
 
     arl: float
     error_estandar: float
     n_streams: int
     n_censurados: int
+    n_excluidos_por_alarma_temprana: int = 0
 
     @property
     def intervalo_95(self) -> tuple[float, float]:
@@ -60,17 +78,18 @@ def _tiempo_hasta_alarma(
     detector: Detector,
     observaciones: list[MetricObservation],
 ) -> tuple[int, bool]:
-    """Corre un detector sobre una serie y devuelve (tiempo, censurado).
+    """Corre un detector sobre una serie y devuelve (racha, censurado).
 
-    tiempo: el t de la primera alarma, o len(observaciones) si nunca
-            alarmó (censurado).
+    racha: número de observaciones CONSUMIDAS hasta la alarma incluida
+           (una alarma en el índice 0 da racha 1), o len(observaciones)
+           si nunca alarmó.
     censurado: True si nunca alarmó dentro de la serie.
     """
     detector.reset()
     for obs in observaciones:
         alarma = detector.update(obs)
         if alarma is not None:
-            return alarma.t, False
+            return alarma.t + 1, False
     return len(observaciones), True
 
 
@@ -93,10 +112,18 @@ def medir_arl0(
         if censurado:
             n_censurados += 1
 
+    if not tiempos:
+        return ResultadoARL(float("nan"), float("nan"), 0, 0)
+
     tiempos_arr = np.array(tiempos, dtype=float)
+    error = (
+        float(tiempos_arr.std(ddof=1) / np.sqrt(len(tiempos_arr)))
+        if len(tiempos_arr) > 1
+        else 0.0
+    )
     return ResultadoARL(
         arl=float(tiempos_arr.mean()),
-        error_estandar=float(tiempos_arr.std(ddof=1) / np.sqrt(len(tiempos_arr))),
+        error_estandar=error,
         n_streams=len(tiempos),
         n_censurados=n_censurados,
     )
@@ -107,19 +134,23 @@ def medir_arl1(
     streams_con_cambio: list[list[MetricObservation]],
     ground_truths: list[GroundTruth],
 ) -> ResultadoARL:
-    """Mide el ARL1: RETARDO de detección, es decir, tiempo hasta la
-    alarma MENOS tau (el instante real del cambio) — no el tiempo
-    absoluto de la alarma.
+    """Mide el ARL1: RETARDO de detección, es decir, observaciones
+    consumidas DESDE tau hasta la alarma — no el tiempo absoluto.
 
     Requiere que ground_truths[i] corresponda a streams_con_cambio[i]
     (misma posición) y que tau no sea None en ninguno (si lo es, ese
     stream no pertenece aquí — es un "sin_cambio" y va a medir_arl0).
 
-    Streams donde el detector alarma ANTES de tau se excluyen de la
-    media de retardo con un aviso: eso sería, en el mejor de los casos,
-    una alarma "por casualidad" en la parte de la serie sin cambio
-    real, no una detección genuina del cambio — mezclar esos casos en
-    el ARL1 subestimaría el retardo real de forma artificial y optimista.
+    Los streams donde el detector alarma ANTES de tau NO entran en la
+    media (no son detecciones del cambio), pero se CUENTAN y se devuelven
+    en n_excluidos_por_alarma_temprana. Ese número es tan importante como
+    el retardo: mide cuántas veces el detector gritó antes de que hubiera
+    nada que detectar, y sin él los retardos de distintos puntos de
+    operación no son comparables entre sí.
+
+    Si no queda ningún stream utilizable, devuelve arl=nan con n_streams=0
+    (no lanza excepción): un detector que siempre alarma antes de tau es
+    un resultado informativo, no un error de programa.
     """
     if len(streams_con_cambio) != len(ground_truths):
         raise ValueError(
@@ -129,7 +160,7 @@ def medir_arl1(
 
     retardos = []
     n_censurados = 0
-    n_excluidos_por_alarma_temprana = 0
+    n_excluidos = 0
 
     for obs, gt in zip(streams_con_cambio, ground_truths):
         if gt.tau is None:
@@ -140,15 +171,16 @@ def medir_arl1(
         detector = fabricar_detector()
         t, censurado = _tiempo_hasta_alarma(detector, obs)
 
-        if not censurado and t < gt.tau:
-            # alarma antes de que ocurriera el cambio real: no es una
-            # detección genuina, se excluye para no sesgar el retardo
-            n_excluidos_por_alarma_temprana += 1
+        # t es un CONTEO de observaciones consumidas, así que una alarma
+        # en el último instante ANTES del cambio (índice tau-1) da t=tau.
+        # Por eso la comparación es <= y no <.
+        if not censurado and t <= gt.tau:
+            n_excluidos += 1
             continue
 
         if censurado:
-            # nunca alarmó: el retardo es "al menos" la longitud restante
-            # de la serie desde tau
+            # nunca alarmó: el retardo es "al menos" lo que quedaba de
+            # serie desde tau
             retardo = len(obs) - gt.tau
             n_censurados += 1
         else:
@@ -157,15 +189,24 @@ def medir_arl1(
         retardos.append(retardo)
 
     if not retardos:
-        raise ValueError(
-            "Ningún stream produjo un retardo válido — revisa si el detector "
-            "está calibrado razonablemente para este banco de pruebas."
+        return ResultadoARL(
+            arl=float("nan"),
+            error_estandar=float("nan"),
+            n_streams=0,
+            n_censurados=0,
+            n_excluidos_por_alarma_temprana=n_excluidos,
         )
 
     retardos_arr = np.array(retardos, dtype=float)
+    error = (
+        float(retardos_arr.std(ddof=1) / np.sqrt(len(retardos_arr)))
+        if len(retardos_arr) > 1
+        else 0.0
+    )
     return ResultadoARL(
         arl=float(retardos_arr.mean()),
-        error_estandar=float(retardos_arr.std(ddof=1) / np.sqrt(len(retardos_arr))),
+        error_estandar=error,
         n_streams=len(retardos),
         n_censurados=n_censurados,
+        n_excluidos_por_alarma_temprana=n_excluidos,
     )

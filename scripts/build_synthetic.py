@@ -27,7 +27,7 @@ from signal_watch.synthetic.build_gold import EscenarioConfig, generar_stream
 # ── Parámetros del banco de pruebas ───────────────────────────────────
 
 N_PERIODOS = 100  # longitud de cada serie sintética
-N_REPLICAS = 50  # cuántas series por combinación (escenario x tau x delta)
+N_REPLICAS = 200  # cuántas series por combinación (escenario x tau x delta)
 N_OBS_BASE = 800  # tamaño de muestra típico de cada periodo
 
 # Escenarios y magnitudes a cubrir. Cada combinación se repite

@@ -133,3 +133,48 @@ def filtrar_por_metrica(banco: BancoDePruebas, tipo_metrica: str) -> BancoDePrue
         streams_con_cambio=con_cambio_filtrado,
         ground_truths_con_cambio=gt_filtrado,
     )
+    
+import re
+
+# El stream_id lo construye build_synthetic.py como
+#   f"{prefijo}_{tipo_metrica}_{escenario}_d{delta:.1f}_r{replica:03d}"
+# p.ej. "sint_eval_auc_cambio_varianza_d1.5_r007".
+# Se extrae delta con expresión regular y NO partiendo por "_", porque
+# el nombre del escenario puede llevar guion bajo dentro
+# ("cambio_varianza") y partir por "_" daría un resultado equivocado.
+_PATRON_DELTA = re.compile(r"_d(\d+\.\d+)_r")
+
+
+def extraer_delta(stream_id: str) -> float | None:
+    """Saca la magnitud delta_sigma del nombre del stream, o None si
+    el nombre no sigue el patrón esperado."""
+    m = _PATRON_DELTA.search(stream_id)
+    return float(m.group(1)) if m else None
+
+
+def estratos_con_cambio(
+    banco: BancoDePruebas,
+) -> dict[tuple[str, float], tuple[list, list]]:
+    """Parte los streams CON cambio en estratos (escenario, delta_sigma).
+
+    Por qué esto es necesario y no un lujo: un ARL1 que promedia los
+    tres escenarios y las cinco magnitudes en un solo número no mide
+    el rendimiento de un detector — mide la MEZCLA concreta de
+    escenarios del banco. Como CUSUM y 3-sigma tienen perfiles opuestos
+    (CUSUM gana en derivas pequeñas, 3-sigma en saltos grandes y en
+    cambios de varianza donde CUSUM es ciego por construcción), el
+    promedio agrupado puede invertir el orden real entre detectores.
+    Estratificar es lo que permite decir "funciona bien AQUÍ y flojea
+    ALLÁ" en vez de una media que no describe ningún caso.
+
+    Devuelve {(escenario, delta): (streams, ground_truths)}.
+    """
+    grupos: dict[tuple[str, float], tuple[list, list]] = {}
+    for stream, gt in zip(banco.streams_con_cambio, banco.ground_truths_con_cambio):
+        delta = extraer_delta(stream[0].stream_id)
+        clave = (gt.escenario, delta if delta is not None else float("nan"))
+        if clave not in grupos:
+            grupos[clave] = ([], [])
+        grupos[clave][0].append(stream)
+        grupos[clave][1].append(gt)
+    return grupos
