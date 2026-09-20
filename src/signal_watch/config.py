@@ -1,6 +1,6 @@
 """Configuración del proyecto: carga, validación y huella digital.
 
-Este módulo hace tres cosas:
+Este módulo hace cuatro cosas:
   1. Carga archivos YAML de configs/ en diccionarios Python.
   2. Valida que no falten campos obligatorios.
   3. Genera una HUELLA DIGITAL (config_hash) de cada configuración,
@@ -10,6 +10,8 @@ Este módulo hace tres cosas:
        - config distinta → hash distinto
      Esto es lo que permite R5 (no evaluar sin config congelada) y
      R7 (cada resultado lleva el hash de la config que lo produjo).
+  4. Sella un resultado con su huella de reproducibilidad completa
+     (huella_ejecucion): config, datos de entrada, commit y fecha.
 
 El truco clave es la NORMALIZACIÓN: antes de hashear, se convierte
 la config a JSON con las claves ordenadas (sort_keys=True). Así
@@ -22,6 +24,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -165,3 +169,81 @@ def verify_frozen(config: dict[str, Any], version: str) -> bool:
     """
     frozen = load_frozen(version)
     return config_hash(config) == config_hash(frozen)
+
+
+# ── Trazabilidad de resultados (R7) ──────────────────────────────────
+
+def obtener_commit() -> str:
+    """Hash corto del commit actual de git.
+
+    Devuelve 'sin-git' si no estamos en un repo o git no está
+    disponible. NUNCA lanza: es información de trazabilidad, y que
+    falte no debe tumbar una ejecución de análisis de 40 minutos.
+    """
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return "sin-git"
+
+
+def hash_archivo(path: Path | str, bloque: int = 1 << 20) -> str:
+    """SHA-256 (12 hex) del contenido de un archivo.
+
+    Se lee por bloques de 1 MB en vez de de una vez, porque los Parquet
+    del banco de pruebas pesan cientos de megas y no tiene sentido
+    cargarlos enteros en memoria solo para hashearlos.
+    """
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while trozo := f.read(bloque):
+            h.update(trozo)
+    return h.hexdigest()[:12]
+
+
+def huella_ejecucion(
+    config: dict[str, Any],
+    archivos_datos: list[Path | str],
+) -> dict[str, str]:
+    """La huella que hace reproducible un resultado (R7).
+
+    Son DOS hashes complementarios, a propósito:
+
+      · config_hash — los parámetros del análisis (niveles de ARL0
+        objetivo, k, delta, rangos de búsqueda de umbral). Responde a
+        "¿con qué ajustes se produjo esta tabla?".
+
+      · hash_datos — el contenido REAL de los archivos de entrada.
+        Responde a "¿sobre qué datos?". Captura de una vez el número de
+        réplicas, las semillas y cualquier cambio en el generador, sin
+        tener que enumerarlos uno a uno — y detecta un solo byte
+        distinto.
+
+    Juntos fijan el resultado por completo: mismo par de hashes = misma
+    tabla, necesariamente. Uno solo de los dos no bastaría: los mismos
+    parámetros sobre otro banco dan otros números, y el mismo banco con
+    otros parámetros también.
+
+    IMPORTANTE sobre de dónde sale `config`: tiene que ser la config
+    EFECTIVA que devolvió la función que hizo el cálculo, no un
+    diccionario escrito a mano en el script que llama. Si los parámetros
+    viven dentro de la función de cálculo y el hash se construye fuera,
+    cambiar un parámetro no cambiaría el hash: dos ejecuciones distintas
+    tendrían la misma huella, y R7 quedaría incumplida en silencio —
+    que es peor que no tener huella, porque da falsa confianza.
+    """
+    return {
+        "config_hash": config_hash(config),
+        "commit": obtener_commit(),
+        "hash_datos": config_hash(
+            {Path(p).name: hash_archivo(p) for p in archivos_datos}
+        ),
+        "generado_en": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }

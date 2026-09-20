@@ -26,6 +26,15 @@ EL ARL1 SE MIDE POR ESTRATO (escenario × delta), NUNCA AGRUPADO:
   cambio, SÍ es un número único por punto de operación: es una
   propiedad del detector bajo H0 y no depende del escenario.
 
+TRAZABILIDAD (R7):
+  construir_curvas_para_metrica() devuelve, junto a los resultados, la
+  CONFIG EFECTIVA que ha usado de verdad. El config_hash se calcula de
+  ahí, no de un diccionario escrito a mano en el script que llama.
+  La diferencia importa: si los parámetros viven dentro de esta función
+  y el hash se calcula fuera, cambiar un parámetro aquí NO cambiaría el
+  hash — dos ejecuciones distintas tendrían la misma huella y R7
+  quedaría incumplida en silencio, que es peor que no tener huella.
+
 Esta pieza SOLO calcula. No dibuja (eso es reporting/figures.py, R6/R9).
 """
 
@@ -214,9 +223,20 @@ def construir_curvas_para_metrica(
     ruta_evaluacion_gt: Path,
     niveles_arl0_objetivo: list[float] = [20, 30, 50, 70, 90],
     delta_page_hinkley: float = 0.25,
-) -> dict[str, list[PuntoOperacion]]:
+    k_cusum: float = 0.5,
+    umbral_min: float = 1.0,
+    umbral_max: float = 20.0,
+    umbral_fijo_psi: float = 0.25,
+    k_tres_sigma: float = 3.0,
+) -> tuple[dict[str, list[PuntoOperacion]], dict]:
     """Punto de entrada: construye todos los puntos para tipo_metrica
     ('auc' o 'psi') usando los bancos reales en disco.
+
+    Devuelve (resultados, config_efectiva). La config efectiva es lo que
+    esta ejecución ha usado DE VERDAD, y es de donde sale el config_hash
+    del CSV (R7). Todos los parámetros que pueden cambiar un número están
+    en la firma, no escondidos en el cuerpo — precisamente para que la
+    huella no pueda mentir.
 
     delta_page_hinkley se deja en 0.25, distinto del k=0.5 del CUSUM,
     a propósito: con delta = k los dos detectores son ALGEBRAICAMENTE
@@ -247,12 +267,12 @@ def construir_curvas_para_metrica(
 
     resultados["CUSUM"] = curva_detector_calibrable(
         "CUSUM",
-        lambda h: CUSUM(mu0=mu0, sigma=sigma, k=0.5, h=h, direction=direction),
+        lambda h: CUSUM(mu0=mu0, sigma=sigma, k=k_cusum, h=h, direction=direction),
         banco_calibracion.streams_sin_cambio,
         banco_evaluacion.streams_sin_cambio,
         estratos,
-        umbral_min=1.0,
-        umbral_max=20.0,
+        umbral_min=umbral_min,
+        umbral_max=umbral_max,
         niveles_arl0_objetivo=niveles_arl0_objetivo,
     )
 
@@ -267,14 +287,14 @@ def construir_curvas_para_metrica(
         banco_calibracion.streams_sin_cambio,
         banco_evaluacion.streams_sin_cambio,
         estratos,
-        umbral_min=1.0,
-        umbral_max=20.0,
+        umbral_min=umbral_min,
+        umbral_max=umbral_max,
         niveles_arl0_objetivo=niveles_arl0_objetivo,
     )
 
     resultados["3-sigma"] = punto_detector_folclore(
         "3-sigma",
-        lambda: TresSigma(mu0=mu0, sigma=sigma, direction=direction),
+        lambda: TresSigma(mu0=mu0, sigma=sigma, k=k_tres_sigma, direction=direction),
         banco_evaluacion.streams_sin_cambio,
         estratos,
     )
@@ -282,12 +302,30 @@ def construir_curvas_para_metrica(
     if tipo_metrica == "psi":
         resultados["UmbralFijo (PSI>0.25)"] = punto_detector_folclore(
             "UmbralFijo (PSI>0.25)",
-            lambda: UmbralFijo(umbral=0.25, direction=direction),
+            lambda: UmbralFijo(umbral=umbral_fijo_psi, direction=direction),
             banco_evaluacion.streams_sin_cambio,
             estratos,
         )
 
-    return resultados
+    # La config EFECTIVA — lo que esta ejecución usó realmente.
+    # mu0 y sigma entran aquí aunque sean estimados y no elegidos: si el
+    # banco de calibración cambiara, cambiarían, y el resultado también.
+    config_efectiva = {
+        "tipo_metrica": tipo_metrica,
+        "niveles_arl0_objetivo": list(niveles_arl0_objetivo),
+        "k_cusum": k_cusum,
+        "delta_page_hinkley": delta_page_hinkley,
+        "umbral_min": umbral_min,
+        "umbral_max": umbral_max,
+        "umbral_fijo_psi": umbral_fijo_psi,
+        "k_tres_sigma": k_tres_sigma,
+        "biseccion_tolerancia": 0.05,
+        "biseccion_max_iter": 30,
+        "mu0_estimado": round(mu0, 8),
+        "sigma_estimado": round(sigma, 8),
+    }
+    return resultados, config_efectiva
+
 
 def seleccionar_punto_comparable(df, tipo_metrica: str, arl0_referencia: float | None = None):
     """Para cada detector, elige el punto de operación cuyo ARL0 medido
