@@ -28,3 +28,9 @@ build/
 # entorno
 .env
 .DS_Store
+
+# El manifiesto de descargas SI se versiona: los datos de raw/ no van
+# al repo, asi que esta es la unica prueba de que los resultados salieron
+# de ese fichero exacto (R7 aplicada a datos que no se regeneran).
+!data/raw/_metadata/
+!data/raw/_metadata/*.json
