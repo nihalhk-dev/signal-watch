@@ -142,15 +142,34 @@ def main() -> None:
     print(f"  Guardado: {ruta_eval_obs}")
     print(f"  Guardado: {ruta_eval_gt}")
 
-    # ── Verificación de la regla de semillas disjuntas ──
-    semillas_calib = {cfg.seed for cfg in _construir_configs("auc", SEMILLA_BASE_CALIBRACION, "x")}
-    semillas_eval = {cfg.seed for cfg in _construir_configs("auc", SEMILLA_BASE_EVALUACION, "x")}
-    interseccion = semillas_calib & semillas_eval
-    assert not interseccion, (
-        f"¡VIOLACIÓN DE R4! Hay semillas compartidas entre calibración y "
-        f"evaluación: {interseccion}"
-    )
-    print("\nVerificado: semillas de calibración y evaluación son disjuntas (R4).")
+    # ── Verificación de la regla de semillas disjuntas (R4) ──
+    #
+    # Hay CUATRO rangos de semillas en juego, no dos: cada conjunto
+    # (calibración / evaluación) se divide a su vez en AUC y PSI, con un
+    # desplazamiento de +500.000 entre métricas. Comprobar solo el par
+    # AUC-calibración / AUC-evaluación verificaría un cuarto de R4 y
+    # dejaría sin vigilar, por ejemplo, que AUC-calibración no alcance a
+    # PSI-calibración si algún día sube N_REPLICAS.
+    #
+    # Se comprueban los seis pares posibles. Con N_REPLICAS=200 el margen
+    # es enorme (harían falta más de 31.000 réplicas para que el primer
+    # par colisionara), pero la aserción debe verificar lo que dice
+    # verificar, no una parte cómoda.
+    rangos = {
+        "auc_calib": {c.seed for c in _construir_configs("auc", SEMILLA_BASE_CALIBRACION, "x")},
+        "psi_calib": {c.seed for c in _construir_configs("psi", SEMILLA_BASE_CALIBRACION + 500_000, "x")},
+        "auc_eval": {c.seed for c in _construir_configs("auc", SEMILLA_BASE_EVALUACION, "x")},
+        "psi_eval": {c.seed for c in _construir_configs("psi", SEMILLA_BASE_EVALUACION + 500_000, "x")},
+    }
+    for a, b in [(x, y) for x in rangos for y in rangos if x < y]:
+        comun = rangos[a] & rangos[b]
+        assert not comun, (
+            f"¡VIOLACIÓN DE R4! {a} y {b} comparten semillas "
+            f"(ejemplo: {sorted(comun)[:5]})"
+        )
+    print("\nVerificado (R4): los 4 rangos de semillas son disjuntos dos a dos.")
+    for nombre, s in sorted(rangos.items()):
+        print(f"    {nombre:10} {min(s):>9,} .. {max(s):>9,}  ({len(s)} semillas)")
     print(f"\nBanco de pruebas completo: {len(todas_obs_calib) + len(todas_obs_eval)} "
           f"observaciones totales.")
 
