@@ -139,7 +139,8 @@ def generar_psi_desde_chi2(
     muestras_chi2 = rng.chisquare(df=df, size=n)
     # normalizamos por n_obs: con más observaciones, el PSI "de ruido"
     # esperado bajo H0 es menor (histogramas se parecen más al azar)
-    psi = escala * muestras_chi2 / n_obs * 100  # *100 para escalar a rango típico ~0-0.3
+    #psi = escala * muestras_chi2 / n_obs * 100  # *100 para escalar a rango típico ~0-0.3 (BUUUUUG)
+    psi = escala * muestras_chi2 / n_obs  # ya en escala PSI real, sin *100
     return psi
 
 

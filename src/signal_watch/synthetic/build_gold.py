@@ -132,7 +132,8 @@ def _generar_stream_psi(cfg: EscenarioConfig) -> tuple[list[MetricObservation], 
         valores = inyectar_cambio_psi(valores, cfg.tau, incremento)
         # ruido extra apreciable frente al ruido base de chi2, para que
         # la mayor inestabilidad sea real y medible, no solo nominal
-        ruido_extra = rng.chisquare(df=3, size=cfg.n - cfg.tau) * 0.15
+        #ruido_extra = rng.chisquare(df=3, size=cfg.n - cfg.tau) * 0.15
+        ruido_extra = rng.chisquare(df=3, size=cfg.n - cfg.tau) * 0.0015  # ÷100, misma proporcion que antes del fix del Bug 1
         valores[cfg.tau :] += ruido_extra
         valores = clip_psi(valores)
     elif cfg.escenario == "sin_cambio":
