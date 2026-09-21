@@ -71,9 +71,15 @@ import numpy as np
 from signal_watch.detectors.baseline import TresSigma
 from signal_watch.detectors.cusum import CUSUM
 from signal_watch.detectors.page_hinkley import PageHinkley
-from signal_watch.evaluation.arl import medir_arl0
+from signal_watch.evaluation.arl import medir_arl0, medir_arl1
 from signal_watch.evaluation.delay_curves import _calibrar_umbral_biseccion
+from signal_watch.gold.metric_stream import GroundTruth
 from signal_watch.gold.schemas import Direction, MetricObservation
+from signal_watch.synthetic.scenarios import aplicar_deriva, aplicar_salto
+
+# Las MISMAS funciones de inyección del banco sintético (Bloque 2): el
+# método no cambia, lo que cambia es el ruido sobre el que se inyecta.
+INYECTORES = {"salto": aplicar_salto, "deriva": aplicar_deriva}
 
 # Rango de búsqueda de cada umbral, en unidades de sigma.
 RANGOS_UMBRAL = {
@@ -316,3 +322,108 @@ def calibrar_en_ruido_real(
         "arl0_alcanzable": {k: round(v, 4) for k, v in arl0_alcanzable.items()},
     }
     return calibraciones, config_efectiva, float(clasico.arl)
+
+
+# ── Retardo sobre ruido real: inyección de un cambio conocido ────────
+#
+# Sobre la serie cruda no hay τ, así que no se puede medir un retardo.
+# Aquí se fabrica: se toma ruido real (el mismo bootstrap de la referencia),
+# se inyecta una caída de tamaño conocido en un τ elegido, y se mide cuánto
+# tarda cada detector —con los umbrales YA calibrados, sin reajustar nada—.
+#
+# Es el cierre metodológico que pedía el manual para la fase de validación
+# real: "tus curvas de retardo valen sobre tu ruido de juguete; ¿valen sobre
+# ruido real?". Esta es la respuesta.
+#
+# Limitación declarada: el ruido sale de remuestrear UNA historia (330
+# meses). Mide el rendimiento sobre el ruido de esa historia, no sobre ruido
+# fuera de muestra.
+
+
+@dataclass(frozen=True)
+class PuntoRetardo:
+    """Retardo de un detector ante un cambio inyectado de tamaño conocido."""
+
+    detector: str
+    escenario: str
+    delta_sigma: float        # tamaño del cambio en unidades de sigma de la serie
+    delta_sharpe: float       # el mismo cambio en Sharpe anualizado (interpretable)
+    arl1: float               # retardo medio desde τ, en meses
+    arl1_ic95: tuple[float, float]
+    n_streams: int            # series que entran en la media del retardo
+    n_censurados: int         # no alarmaron dentro del horizonte
+    n_excluidos_pre_tau: int  # alarmaron ANTES del cambio (falsa alarma, se cuenta)
+    n_series: int             # series fabricadas por celda
+
+
+def medir_retardo_con_inyeccion(
+    obs_referencia: list[MetricObservation],
+    calibraciones: dict[str, "Calibracion"],
+    k_cusum: float,
+    delta_page_hinkley: float,
+    escenarios: list[str],
+    deltas_sigma: list[float],
+    tau: int,
+    horizonte: int,
+    n_series: int,
+    bootstrap_bloque: int,
+    semilla: int,
+) -> list[PuntoRetardo]:
+    """Mide el retardo de cada detector calibrado ante caídas inyectadas.
+
+    Números aleatorios comunes: TODAS las celdas (escenario × delta) usan el
+    mismo ruido de fondo. Así la diferencia entre dos magnitudes es solo el
+    tamaño del cambio, no la suerte de haber sacado otro ruido.
+    """
+    ruido = ruido_empirico(obs_referencia)
+    mu0, sigma = ruido["mu0"], ruido["sigma"]
+    direction = obs_referencia[0].direction
+    # la caída va en la dirección MALA de la métrica (lección del Bloque 2, §8.1)
+    signo = -1.0 if direction == Direction.LOWER_IS_WORSE else 1.0
+
+    base = series_nulas_bootstrap(
+        obs_referencia, n_series, tau + horizonte, bootstrap_bloque, semilla
+    )
+
+    puntos: list[PuntoRetardo] = []
+    for escenario in escenarios:
+        if escenario not in INYECTORES:
+            raise ValueError(f"Escenario de inyección desconocido: {escenario}")
+        inyectar = INYECTORES[escenario]
+        for d in deltas_sigma:
+            streams, verdades = [], []
+            for i, serie in enumerate(base):
+                valores = np.array([o.value for o in serie], dtype=float)
+                nuevos = inyectar(valores.copy(), tau, signo * d, sigma)
+                sid = f"iny_{escenario}_d{d:.2f}_r{i:04d}"
+                streams.append(
+                    [
+                        o.model_copy(update={"value": float(v), "stream_id": sid})
+                        for o, v in zip(serie, nuevos)
+                    ]
+                )
+                verdades.append(GroundTruth(stream_id=sid, tau=tau, escenario=escenario))
+
+            for nombre, c in calibraciones.items():
+                r = medir_arl1(
+                    lambda: fabricar_detector(
+                        nombre, c.umbral, mu0, sigma, direction, k_cusum, delta_page_hinkley
+                    ),
+                    streams,
+                    verdades,
+                )
+                puntos.append(
+                    PuntoRetardo(
+                        detector=nombre,
+                        escenario=escenario,
+                        delta_sigma=float(d),
+                        delta_sharpe=float(d * sigma),
+                        arl1=float(r.arl),
+                        arl1_ic95=tuple(float(v) for v in r.intervalo_95),
+                        n_streams=int(r.n_streams),
+                        n_censurados=int(r.n_censurados),
+                        n_excluidos_pre_tau=int(r.n_excluidos_por_alarma_temprana),
+                        n_series=n_series,
+                    )
+                )
+    return puntos

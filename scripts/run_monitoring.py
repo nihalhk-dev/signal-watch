@@ -11,9 +11,13 @@ Qué hace, en orden:
   3. Calibra CUSUM, Page-Hinkley y Shewhart al mismo ARL0, por bootstrap
      de bloques de la referencia (ver evaluation/error_analysis.py).
   4. Recorre la vigilancia con cada detector (monitoring/engine.py).
-  5. Guarda dos tablas selladas con la huella R7:
+  5. Mide el RETARDO sobre ruido real: inyecta una caída de tamaño conocido
+     en un τ fijado sobre el bootstrap de la referencia (la única forma de
+     medir retardo en una rama sin τ; ver evaluation/error_analysis.py).
+  6. Guarda tres tablas selladas con la huella R7:
        outputs/tables/calibracion_<stream>.csv
        outputs/tables/alarmas_<stream>.csv
+       outputs/tables/retardo_ruido_real_<stream>.csv
 
 LEER ANTES DE INTERPRETAR LA SALIDA
     En datos reales no hay τ. Una alarma NO es "el sistema detectó X".
@@ -34,6 +38,7 @@ from signal_watch.config import huella_ejecucion, validate_keys
 from signal_watch.evaluation.error_analysis import (
     calibrar_en_ruido_real,
     fabricar_detector,
+    medir_retardo_con_inyeccion,
     ruido_empirico,
 )
 from signal_watch.gold.factor_metrics import cargar_config, ruta_stream
@@ -53,6 +58,9 @@ CLAVES_MONITORIZACION = {
     "semilla_calibracion",
     "semilla_verificacion",
 }
+CLAVES_INYECCION = {
+    "escenarios", "deltas_sigma", "tau_meses", "horizonte_meses", "n_series", "semilla",
+}
 
 
 def main(stream_id: str = "factor_hml_sharpe") -> None:
@@ -61,6 +69,13 @@ def main(stream_id: str = "factor_hml_sharpe") -> None:
         raise KeyError(f"configs/streams/{stream_id}.yaml no tiene bloque 'monitorizacion'")
     mon = cfg["monitorizacion"]
     validate_keys(mon, CLAVES_MONITORIZACION, name=f"{stream_id}.yaml:monitorizacion")
+    if "inyeccion" not in cfg:
+        raise KeyError(f"configs/streams/{stream_id}.yaml no tiene bloque 'inyeccion'")
+    iny = cfg["inyeccion"]
+    validate_keys(iny, CLAVES_INYECCION, name=f"{stream_id}.yaml:inyeccion")
+    semillas = {mon["semilla_calibracion"], mon["semilla_verificacion"], iny["semilla"]}
+    if len(semillas) != 3:
+        raise ValueError("Calibración, verificación e inyección necesitan semillas distintas (R4).")
 
     ruta = ruta_stream(stream_id)
     obs = load_metric_stream(ruta)
@@ -106,7 +121,8 @@ def main(stream_id: str = "factor_hml_sharpe") -> None:
         semilla_verificacion=int(mon["semilla_verificacion"]),
     )
     config_efectiva = {"stream_id": stream_id, "fin_calibracion": cfg["fin_calibracion"],
-                       **config_efectiva}
+                       **config_efectiva,
+                       "inyeccion": {k: iny[k] for k in sorted(CLAVES_INYECCION)}}
 
     archivos_datos = [ruta, carpeta_french() / NOMBRE_ZIP]
     huella = huella_ejecucion(config_efectiva, archivos_datos)
@@ -151,6 +167,53 @@ def main(stream_id: str = "factor_hml_sharpe") -> None:
             print("   por década: " + ", ".join(f"{d}s: {n}" for d, n in sorted(por_decada.items())))
         print()
 
+    print("-" * 72)
+    print("RETARDO SOBRE RUIDO REAL (caída inyectada en un τ conocido)")
+    print("-" * 72)
+    print(f"τ = mes {iny['tau_meses']}, horizonte {iny['horizonte_meses']} meses, "
+          f"{iny['n_series']} series por celda. Umbrales: los calibrados arriba.", flush=True)
+    puntos = medir_retardo_con_inyeccion(
+        referencia, calib,
+        k_cusum=float(mon["k_cusum"]),
+        delta_page_hinkley=float(mon["delta_page_hinkley"]),
+        escenarios=list(iny["escenarios"]),
+        deltas_sigma=[float(d) for d in iny["deltas_sigma"]],
+        tau=int(iny["tau_meses"]),
+        horizonte=int(iny["horizonte_meses"]),
+        n_series=int(iny["n_series"]),
+        bootstrap_bloque=int(mon["bootstrap_bloque_meses"]),
+        semilla=int(iny["semilla"]),
+    )
+    tabla_retardo = pd.DataFrame(
+        [
+            {
+                "stream_id": stream_id, "detector": p.detector, "escenario": p.escenario,
+                "delta_sigma": p.delta_sigma, "delta_sharpe": p.delta_sharpe,
+                "arl1_meses": p.arl1, "arl1_ic_low": p.arl1_ic95[0],
+                "arl1_ic_high": p.arl1_ic95[1], "n_streams": p.n_streams,
+                "n_censurados": p.n_censurados, "n_excluidos_pre_tau": p.n_excluidos_pre_tau,
+                "n_series": p.n_series, **huella,
+            }
+            for p in puntos
+        ]
+    )
+    for escenario in iny["escenarios"]:
+        sub = tabla_retardo[tabla_retardo["escenario"] == escenario]
+        tabla = sub.pivot(index="detector", columns="delta_sigma", values="arl1_meses")
+        tabla = tabla.reindex(list(calib))
+        tabla.columns = [f"{d:g}σ ({d * r['sigma']:.2f} SR)" for d in tabla.columns]
+        print(f"\n{escenario} — retardo medio en MESES desde el cambio:")
+        print(tabla.round(1).to_string())
+        cens = sub.pivot(index="detector", columns="delta_sigma", values="n_censurados")
+        excl = sub.pivot(index="detector", columns="delta_sigma", values="n_excluidos_pre_tau")
+        print(f"  censuradas por celda (de {iny['n_series']}): "
+              + ", ".join(f"{d}: {int(cens.loc[d].max())}" for d in calib)
+              + " (máximo entre magnitudes)")
+        print(f"  excluidas por falsa alarma antes de τ: "
+              + ", ".join(f"{d}: {int(excl.loc[d].min())}-{int(excl.loc[d].max())}" for d in calib))
+    print("\n  'SR' = el tamaño del cambio en Sharpe anualizado. 0,15σ ≈ el factor")
+    print("  pasa a Sharpe cero; 0,25σ ≈ la caída media de los 2010.\n")
+
     tabla_calib = pd.DataFrame(
         [
             {
@@ -168,12 +231,15 @@ def main(stream_id: str = "factor_hml_sharpe") -> None:
     destino = PATHS.ensure(PATHS.outputs_tables)
     ruta_calib = destino / f"calibracion_{stream_id}.csv"
     ruta_alarmas = destino / f"alarmas_{stream_id}.csv"
+    ruta_retardo = destino / f"retardo_ruido_real_{stream_id}.csv"
     tabla_calib.to_csv(ruta_calib, index=False)
     a_dataframe(eventos).to_csv(ruta_alarmas, index=False)
+    tabla_retardo.to_csv(ruta_retardo, index=False)
 
     print("-" * 72)
     print(f"Guardado: {ruta_calib}")
     print(f"Guardado: {ruta_alarmas}")
+    print(f"Guardado: {ruta_retardo}")
     print(f"Huella:   config_hash={huella['config_hash']}  hash_datos={huella['hash_datos']}  "
           f"commit={huella['commit']}")
     print("\nRecordatorio: sin τ, ninguna de estas fechas es 'una detección'. Se leen")

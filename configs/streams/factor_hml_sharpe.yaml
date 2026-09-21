@@ -56,3 +56,21 @@ monitorizacion:
   # Lejos de todos los rangos del banco sintetico (0 .. 1.503.199).
   semilla_calibracion: 9000000
   semilla_verificacion: 9500000
+
+# ── Retardo sobre ruido real: inyeccion de un cambio conocido ──────────
+# Sobre la serie cruda no hay tau. Aqui se fabrica: ruido real (bootstrap
+# de la referencia) + una caida de tamano conocido en el mes `tau`. Se usan
+# los umbrales YA calibrados arriba, sin reajustar.
+inyeccion:
+  escenarios: [salto, deriva]
+  # 0.15 sigma = el factor pasa a Sharpe cero (0.86 / 5.71): lo que importa.
+  # 0.25 sigma ~ la caida de los 2010. 1 y 2 sigma conectan con el Bloque 4.
+  deltas_sigma: [0.15, 0.25, 0.5, 1.0, 2.0]
+  # tau corto: con ARL0 = 120, un tau de 60 excluiria ~40% de series por
+  # falsa alarma ANTES del cambio (el sesgo de MEMORIA 8.2). Con 24, ~18%.
+  tau_meses: 24
+  # detectar 0.15 sigma cuesta ~5 anos: con menos horizonte, todo censurado
+  horizonte_meses: 216
+  n_series: 1000
+  # distinta de calibracion y verificacion (R4)
+  semilla: 9900000
