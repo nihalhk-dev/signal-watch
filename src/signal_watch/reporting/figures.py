@@ -146,6 +146,7 @@ def fig_rama_real(
     arl0_objetivo: float,
     esperadas_por_azar: float,
     ventana_media: int = 36,
+    titulo: str | None = None,
 ):
     """La figura de la rama real, en una sola pieza.
 
@@ -217,8 +218,9 @@ def fig_rama_real(
     ax.set_ylim(-18, 18)
     ax.set_ylabel("Sharpe anualizado\ndel mes", fontsize=9.5, color=TINTA_2)
     ax.legend(loc="lower left", frameon=False, fontsize=8.5, labelcolor=TINTA_2)
-    ax.set_title("HML mensual, 1963-2026: el ruido de cada mes es mucho mayor que los cambios de régimen",
-                 fontsize=11, color=TINTA_1, loc="left", pad=8)
+    # `titulo` lo pone el YAML del stream (titulo_figura); sin él, el de HML.
+    ax.set_title(titulo or "HML mensual, 1963-2026: el ruido de cada mes es mucho mayor que los "
+                 "cambios de régimen", fontsize=11, color=TINTA_1, loc="left", pad=8)
     _estilo(ax)
     plt.setp(ax.get_xticklabels(), visible=False)
 
@@ -297,3 +299,4 @@ def fig_rama_real(
     )
     fig.subplots_adjust(left=0.08, right=0.97, top=0.93, bottom=0.10)
     return fig
+

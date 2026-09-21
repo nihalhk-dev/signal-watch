@@ -1,0 +1,63 @@
+# Stream: Sharpe mensual NETO de una señal de ML sobre HML, datos REALES.
+#
+# Un clasificador (regresión logística) decide cada mes si estar largo o
+# corto en HML; este stream es el rendimiento de esa decisión. El monitor lo
+# trata exactamente igual que al propio HML: es la prueba de que vigila la
+# MÉTRICA de un modelo, sea cual sea el modelo.
+#
+# DESVIACIÓN DEL ÁRBOL, documentada a propósito: el árbol reservaba
+# senal_mom_ic.yaml. Se llama por lo que mide (Sharpe neto de la señal); un
+# IC exige una sección cruzada de activos y aquí hay uno solo. MEMORIA §5.
+#
+# Fechas ENTRE COMILLAS (ver factor_hml_sharpe.yaml).
+
+stream_id: senal_ml_hml_sharpe
+fuente: kenneth_french
+factor: hml
+metrica: sharpe_mensual_anualizado_neto_senal_ml
+direction: lower_is_worse
+frecuencia: mensual
+inicio_muestra: "1963-07-01"
+# Misma frontera que HML: el modelo predice desde ~1974, así que su
+# referencia es 1974-1990, todo fuera de muestra del propio modelo.
+fin_calibracion: "1990-12-31"
+min_dias_por_mes: 15
+# Título de la figura de run_monitoring.py (la de HML lleva el suyo por defecto).
+titulo_figura: "Señal de ML sobre HML, Sharpe neto mensual: el mismo monitor, otro modelo"
+
+# ── La señal (gold/signal_momentum.py) ─────────────────────────────────
+senal:
+  # Todas conocidas al cierre del mes t; se predice el signo de HML en t+1.
+  caracteristicas: [hml_1m, hml_3m, hml_12m, hml_vol_3m, mkt_12m, mkt_vol_3m]
+  # Regularización por defecto de scikit-learn, SIN ajustar: cada ajuste
+  # sería otra prueba que el Deflated Sharpe tendría que descontar.
+  C: 1.0
+  # 10 años de historia antes de la primera predicción.
+  meses_min_entrenamiento: 120
+  # Reentreno anual, al cierre de diciembre, con ventana creciente.
+  mes_reentreno: 12
+  umbral_probabilidad: 0.5
+  # Coste por unidad de rotación, en puntos básicos. Darle la vuelta a la
+  # posición (+1 -> -1) es rotación 2. Supuesto declarado, no medido: los
+  # factores de French no son carteras negociables tal cual.
+  coste_pb: 10
+
+# ── Monitorización: los mismos detectores y objetivo que HML ────────────
+monitorizacion:
+  arl0_objetivo_meses: 120
+  k_cusum: 0.5
+  delta_page_hinkley: 0.25
+  bootstrap_bloque_meses: 6
+  bootstrap_longitud_meses: 600
+  bootstrap_n_series: 1000
+  # Semillas propias de este stream, distintas entre sí (R4) y de las de HML.
+  semilla_calibracion: 9100000
+  semilla_verificacion: 9600000
+
+inyeccion:
+  escenarios: [salto, deriva]
+  deltas_sigma: [0.15, 0.25, 0.5, 1.0, 2.0]
+  tau_meses: 24
+  horizonte_meses: 216
+  n_series: 1000
+  semilla: 9910000

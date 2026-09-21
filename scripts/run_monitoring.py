@@ -138,7 +138,14 @@ def main(stream_id: str = "factor_hml_sharpe") -> None:
         print(f"  {c.detector:<14}{c.umbral:>9.3f}{c.arl0_alcanzable:>12.1f}"
               f"{c.arl0_verificado:>13.1f}{ic:>16}{c.n_censurados:>7}/{c.n_series}")
     print("  'alcanzable' = objetivo, salvo en Shewhart: una regla de UNA observación")
-    print("  sobre 330 valores reales solo puede tener ARL0 = 330/j (ver error_analysis.py).")
+    n_ref = len(referencia)
+    print(f"  sobre {n_ref} valores reales solo puede tener ARL0 = {n_ref}/j (ver error_analysis.py).")
+    for c in calib.values():
+        desvio = (c.arl0_verificado - c.arl0_alcanzable) / c.arl0_alcanzable
+        if abs(desvio) > 0.10:
+            print(f"  AVISO {c.detector}: ARL0 verificado {c.arl0_verificado:.1f} frente a "
+                  f"{c.arl0_alcanzable:.1f} ({desvio:+.0%}). Con una referencia finita el ARL0 va a")
+            print("  saltos en el umbral y la bisección puede caer en el borde de uno. Se declara.")
     print(f"\n  Dato informativo — el 3σ de manual SIN calibrar tendría ARL0 ≈ "
           f"{arl0_3sigma:.0f} meses sobre este mismo ruido.")
 
@@ -214,8 +221,10 @@ def main(stream_id: str = "factor_hml_sharpe") -> None:
               + " (máximo entre magnitudes)")
         print(f"  excluidas por falsa alarma antes de τ: "
               + ", ".join(f"{d}: {int(excl.loc[d].min())}-{int(excl.loc[d].max())}" for d in calib))
-    print("\n  'SR' = el tamaño del cambio en Sharpe anualizado. 0,15σ ≈ el factor")
-    print("  pasa a Sharpe cero; 0,25σ ≈ la caída media de los 2010.\n")
+    print("\n  'SR' = el tamaño del cambio en Sharpe anualizado.")
+    if stream_id == "factor_hml_sharpe":
+        print("  0,15σ ≈ el factor pasa a Sharpe cero; 0,25σ ≈ la caída media de los 2010.")
+    print()
 
     tabla_calib = pd.DataFrame(
         [
@@ -255,6 +264,7 @@ def main(stream_id: str = "factor_hml_sharpe") -> None:
         fin_calibracion=cfg["fin_calibracion"],
         arl0_objetivo=float(mon["arl0_objetivo_meses"]),
         esperadas_por_azar=esperadas,
+        titulo=cfg.get("titulo_figura"),
     )
     ruta_figura = PATHS.ensure(PATHS.outputs_figures) / f"rama_real_{stream_id}.png"
     fig.savefig(ruta_figura, dpi=150, bbox_inches="tight")

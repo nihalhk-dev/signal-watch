@@ -109,7 +109,9 @@ DIAS_HABILES_ANO = 252
 MIN_DIAS_POR_MES = 15
 
 # Factores que YA son retornos de exceso y a los que NUNCA se resta rf.
-FACTORES_EXCESO = ("mkt_rf", "smb", "hml")
+# senal_ml_hml: posición ±1 sobre HML (gold/signal_momentum.py). Una cartera
+# larga-corta por un escalar sigue siendo un retorno de exceso.
+FACTORES_EXCESO = ("mkt_rf", "smb", "hml", "senal_ml_hml")
 
 
 def recortar_muestra(

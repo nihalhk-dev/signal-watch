@@ -91,6 +91,23 @@ for stream_id, r in resumenes.items():
         st.plotly_chart(estilo(fig, alto=300), config=CONFIG_PLOTLY)
 
         st.dataframe(det, hide_index=True)
+
+        # Si el stream es la métrica de un modelo con baseline (la señal de ML),
+        # su tabla resumen_<stream>.csv enseña si el modelo le gana o no.
+        frente = cargar_tabla(f"resumen_{stream_id}")
+        if frente is not None:
+            with st.expander("El modelo frente al baseline (siempre largo)", icon=":material/compare_arrows:"):
+                st.dataframe(
+                    frente[["modelo", "tramo", "desde", "hasta", "meses", "acierto",
+                            "sharpe_anual_bruto", "sharpe_anual_neto", "cambios_por_ano"]]
+                    .rename(columns={"sharpe_anual_bruto": "Sharpe bruto", "sharpe_anual_neto": "Sharpe neto",
+                                     "cambios_por_ano": "cambios/año"}),
+                    hide_index=True,
+                )
+                st.caption("Acierto del baseline = fracción de meses en que HML sube. El monitor "
+                           "vigila el Sharpe NETO del modelo; si el modelo tiene habilidad o no, lo "
+                           "dice esta tabla (y el Deflated Sharpe), no los detectores.")
+
         with st.expander("Huella de reproducibilidad (R7)", icon=":material/fingerprint:"):
             if r["huella"]:
                 st.markdown(
