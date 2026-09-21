@@ -18,6 +18,8 @@ Qué hace, en orden:
        outputs/tables/calibracion_<stream>.csv
        outputs/tables/alarmas_<stream>.csv
        outputs/tables/retardo_ruido_real_<stream>.csv
+     y la figura oficial de la rama real (reporting/figures.py, R9):
+       outputs/figures/rama_real_<stream>.png
 
 LEER ANTES DE INTERPRETAR LA SALIDA
     En datos reales no hay τ. Una alarma NO es "el sistema detectó X".
@@ -47,6 +49,7 @@ from signal_watch.ingest.french import NOMBRE_ZIP, carpeta_french
 from signal_watch.monitoring.alarms import a_dataframe
 from signal_watch.monitoring.engine import run_batch
 from signal_watch.paths import PATHS
+from signal_watch.reporting.figures import fig_rama_real
 
 CLAVES_MONITORIZACION = {
     "arl0_objetivo_meses",
@@ -236,10 +239,32 @@ def main(stream_id: str = "factor_hml_sharpe") -> None:
     a_dataframe(eventos).to_csv(ruta_alarmas, index=False)
     tabla_retardo.to_csv(ruta_retardo, index=False)
 
+    # La figura oficial de la rama real: la dibuja reporting/figures.py (R9),
+    # la guarda el script. Se construye desde las MISMAS tablas que se acaban
+    # de guardar, así que figura y CSV no pueden contar cosas distintas.
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    serie = pd.DataFrame(
+        {"sharpe": [o.value for o in obs]},
+        index=pd.to_datetime([o.timestamp for o in obs]),
+    )
+    fig = fig_rama_real(
+        serie, a_dataframe(eventos), tabla_retardo,
+        fin_calibracion=cfg["fin_calibracion"],
+        arl0_objetivo=float(mon["arl0_objetivo_meses"]),
+        esperadas_por_azar=esperadas,
+    )
+    ruta_figura = PATHS.ensure(PATHS.outputs_figures) / f"rama_real_{stream_id}.png"
+    fig.savefig(ruta_figura, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
     print("-" * 72)
     print(f"Guardado: {ruta_calib}")
     print(f"Guardado: {ruta_alarmas}")
     print(f"Guardado: {ruta_retardo}")
+    print(f"Guardado: {ruta_figura}")
     print(f"Huella:   config_hash={huella['config_hash']}  hash_datos={huella['hash_datos']}  "
           f"commit={huella['commit']}")
     print("\nRecordatorio: sin τ, ninguna de estas fechas es 'una detección'. Se leen")
