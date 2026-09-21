@@ -32,3 +32,27 @@ fin_calibracion: "1990-12-31"
 
 # Meses con menos dias habiles se descartan: un Sharpe con 6 datos es ruido.
 min_dias_por_mes: 15
+
+# ── Monitorizacion (scripts/run_monitoring.py) ──────────────────────────
+monitorizacion:
+  # Una falsa alarma por decada y modelo: es el objetivo que un comite de
+  # modelos elegiria a proposito, y el mismo de la simulacion de cadencia.
+  # LOS TRES detectores se calibran a este mismo ARL0 (MEMORIA 8.6).
+  arl0_objetivo_meses: 120
+
+  # Los mismos parametros de forma que en el Bloque 4, para que los
+  # detectores sean los mismos en las dos ramas.
+  k_cusum: 0.5
+  delta_page_hinkley: 0.25
+
+  # Series "sin cambio" fabricadas remuestreando la ventana de referencia.
+  # Longitud = 5 x ARL0: con series mas cortas el ARL0 saldria censurado
+  # (la leccion de MEMORIA 14.2).
+  bootstrap_bloque_meses: 6
+  bootstrap_longitud_meses: 600
+  bootstrap_n_series: 1000
+
+  # Dos semillas: con una se calibra, con la otra se verifica (R4).
+  # Lejos de todos los rangos del banco sintetico (0 .. 1.503.199).
+  semilla_calibracion: 9000000
+  semilla_verificacion: 9500000
