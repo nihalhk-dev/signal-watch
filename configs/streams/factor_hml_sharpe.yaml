@@ -1,0 +1,34 @@
+# Stream: Sharpe mensual del factor HML (Fama-French), datos REALES.
+#
+# Este archivo es la UNICA fuente de los parametros de la serie real.
+# gold/factor_metrics.py lo lee y se los pasa a processing/factor_returns.py;
+# su config_hash sella el resultado (R7).
+#
+# DESVIACION DEL MANUAL, documentada a proposito:
+#   El manual describia este stream como "Sharpe movil de HML, ventana 252 d".
+#   Se cambia a Sharpe MENSUAL SIN SOLAPE. Motivo medido, no opinado: la
+#   ventana movil diaria comparte 251 de 252 datos con el punto anterior
+#   (autocorrelacion +0,996) y un umbral calibrado sobre ella no significa lo
+#   que dice (ARL0 real 213 cuando se pidio 100). Ver MEMORIA, secciones 5 y 9.
+#
+# Las fechas van ENTRE COMILLAS a proposito: sin ellas YAML las lee como
+# objetos fecha, y el config_hash (que serializa a JSON) fallaria.
+
+stream_id: factor_hml_sharpe
+fuente: kenneth_french
+factor: hml
+metrica: sharpe_mensual_anualizado
+direction: lower_is_worse
+frecuencia: mensual
+
+# 1963-07: muestra canonica de la literatura de factores, y posterior al fin
+# de las sesiones de sabado en la NYSE (1952).
+inicio_muestra: "1963-07-01"
+
+# Ventana de referencia para calibrar el detector: ANTERIOR a la publicacion
+# de Fama-French (1992), cuando nadie arbitraba aun el factor. Todo lo
+# posterior es lo que se vigila y no participa en fijar el umbral.
+fin_calibracion: "1990-12-31"
+
+# Meses con menos dias habiles se descartan: un Sharpe con 6 datos es ruido.
+min_dias_por_mes: 15
