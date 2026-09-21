@@ -1,0 +1,7 @@
+modelo,tramo,desde,hasta,meses,acierto,sharpe_anual_bruto,sharpe_anual_neto,cambios_por_ano,config_hash,commit,hash_datos,generado_en
+ML (logística),referencia,1974-07-31,1990-12-31,198,0.5505,0.6792,0.556,3.76,c1c7ebb7a0ce,f171be2,bdce90482268,2026-09-21T19:17:43+00:00
+ML (logística),vigilancia,1991-01-31,2026-07-31,427,0.5878,0.5052,0.4481,3.18,c1c7ebb7a0ce,f171be2,bdce90482268,2026-09-21T19:17:43+00:00
+ML (logística),total,1974-07-31,2026-07-31,625,0.576,0.5246,0.4562,3.38,c1c7ebb7a0ce,f171be2,bdce90482268,2026-09-21T19:17:43+00:00
+Siempre largo (baseline),referencia,1974-07-31,1990-12-31,198,0.5758,0.8388,0.8378,0.0,c1c7ebb7a0ce,f171be2,bdce90482268,2026-09-21T19:17:43+00:00
+Siempre largo (baseline),vigilancia,1991-01-31,2026-07-31,427,0.4848,0.231,0.231,0.0,c1c7ebb7a0ce,f171be2,bdce90482268,2026-09-21T19:17:43+00:00
+Siempre largo (baseline),total,1974-07-31,2026-07-31,625,0.5136,0.3436,0.3434,0.0,c1c7ebb7a0ce,f171be2,bdce90482268,2026-09-21T19:17:43+00:00
