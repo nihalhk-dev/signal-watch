@@ -55,6 +55,14 @@ dev = [
     "pre-commit>=3.5",
     "nbstripout>=0.7",          # limpia outputs de notebooks antes del commit (R6/R9)
 ]
+# La app (app/Home.py). Extra aparte: el núcleo del proyecto no depende de
+# ella. Se instala con: pip install -e ".[app]"
+# >=1.46: navegación (st.navigation), tema de barra lateral y contenedores con key.
+# plotly: gráficos interactivos (zoom, filtros por periodo, hover).
+app = [
+    "streamlit>=1.46,<2",
+    "plotly>=5.20,<7",
+]
 
 # ---- 4. El comando `signal-watch` -----------------------------------
 # Esto es lo que hace que `signal-watch version` exista tras pip install.

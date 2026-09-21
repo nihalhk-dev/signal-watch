@@ -1,0 +1,28 @@
+# Tema de la app (Streamlit >= 1.46). Paleta sobria de consola de riesgos:
+# fondo gris muy claro, tarjetas blancas, barra lateral azul noche.
+# Los colores de los DETECTORES no salen de aquí: salen de
+# reporting/figures.py (COLORES), para que app y memoria coincidan.
+
+[theme]
+base = "light"
+primaryColor = "#0F4C81"
+backgroundColor = "#F4F6F9"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1B2430"
+font = "sans-serif"
+baseRadius = "0.6rem"
+borderColor = "#E2E7EE"
+showWidgetBorder = true
+
+[theme.sidebar]
+backgroundColor = "#0B1A2E"
+secondaryBackgroundColor = "#15263F"
+textColor = "#D9E1EC"
+primaryColor = "#7FB0F5"
+borderColor = "#22354F"
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false

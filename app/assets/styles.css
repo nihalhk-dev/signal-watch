@@ -1,0 +1,170 @@
+/* Signal Watch — estilo de la app.
+   El tema base (colores, radios, barra lateral) está en .streamlit/config.toml.
+   Aquí solo: tipografía, tarjetas, pestañas y los bloques HTML propios (sw-*).
+   Selectores de Streamlit usados: data-testid estables (stMetric, stSidebar,
+   stHeader, stPageLink) y las clases st-key-<key> de los contenedores con key. */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --sw-navy: #0B1A2E;
+  --sw-navy-2: #13335E;
+  --sw-primary: #0F4C81;
+  --sw-ink: #1B2430;
+  --sw-muted: #5B6778;
+  --sw-line: #E2E7EE;
+  --sw-card: #FFFFFF;
+  --sw-amber: #F2A541;
+  --sw-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 14px rgba(16, 24, 40, 0.05);
+}
+
+html, body, [class*="css"], .stMarkdown, .stText, .stCaption, button, input, textarea {
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+code, .sw-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+/* Lienzo */
+[data-testid="stHeader"] { background: transparent; }
+.block-container { padding-top: 1.6rem; padding-bottom: 3rem; max-width: 1380px; }
+h1 { font-weight: 800; letter-spacing: -0.025em; }
+h2, h3 { font-weight: 700; letter-spacing: -0.015em; }
+
+/* ── Tarjetas de métricas ─────────────────────────────────────────── */
+div[data-testid="stMetric"] {
+  background: var(--sw-card);
+  border: 1px solid var(--sw-line);
+  border-top: 3px solid var(--sw-primary);
+  border-radius: 12px;
+  padding: 14px 16px 12px 16px;
+  box-shadow: var(--sw-shadow);
+}
+div[data-testid="stMetricLabel"] p {
+  /* sin text-transform: uppercase convertiría σ en Σ */
+  font-size: 0.8rem; font-weight: 600; letter-spacing: 0.01em; color: var(--sw-muted);
+}
+div[data-testid="stMetricValue"] { font-weight: 750; letter-spacing: -0.02em; color: var(--sw-ink); }
+
+/* ── Contenedores tarjeta: st.container(border=True, key="card_...") ── */
+[class*="st-key-card"] {
+  background: var(--sw-card);
+  box-shadow: var(--sw-shadow);
+}
+
+/* ── Pestañas tipo "segmented control" ────────────────────────────── */
+div[data-baseweb="tab-list"] {
+  gap: 4px; background: #E9EDF3; padding: 4px; border-radius: 10px; width: fit-content;
+}
+button[data-baseweb="tab"] {
+  border-radius: 8px; padding: 6px 14px; height: auto; background: transparent;
+}
+button[data-baseweb="tab"] p { font-size: 0.9rem; font-weight: 600; color: var(--sw-muted); }
+button[data-baseweb="tab"][aria-selected="true"] { background: var(--sw-card); box-shadow: var(--sw-shadow); }
+button[data-baseweb="tab"][aria-selected="true"] p { color: var(--sw-ink); }
+div[data-baseweb="tab-highlight"], div[data-baseweb="tab-border"] { display: none; }
+div[data-baseweb="tab-panel"] { padding-top: 1rem; }
+
+/* ── Enlaces a páginas como botones ───────────────────────────────── */
+[data-testid="stPageLink"] a {
+  border: 1px solid var(--sw-line); border-radius: 8px; padding: 6px 10px;
+  background: #F7F9FC;
+}
+[data-testid="stPageLink"] a:hover { border-color: var(--sw-primary); background: #EEF4FB; }
+
+/* ── Barra lateral ────────────────────────────────────────────────── */
+section[data-testid="stSidebar"] h2 {
+  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em;
+  color: #8FA3BF; font-weight: 700; margin-top: 0.6rem;
+}
+.sw-brand { padding: 2px 0 10px 0; border-bottom: 1px solid #22354F; margin-bottom: 6px; }
+.sw-brand b { display: block; color: #FFFFFF; font-size: 1.05rem; letter-spacing: -0.01em; }
+.sw-brand span { color: #8FA3BF; font-size: 0.78rem; }
+.sw-huella {
+  margin-top: 18px; padding: 10px 12px; border: 1px solid #22354F; border-radius: 10px;
+  background: #0F2238; font-size: 0.74rem; color: #A9B8CC; line-height: 1.55;
+}
+.sw-huella b { color: #D9E1EC; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.sw-huella code { background: transparent; color: #7FB0F5; font-size: 0.74rem; padding: 0; }
+
+/* ── Portada ──────────────────────────────────────────────────────── */
+.sw-hero {
+  display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: 28px;
+  background: radial-gradient(1200px 400px at 85% -20%, rgba(127, 176, 245, 0.25), transparent 60%),
+              linear-gradient(135deg, var(--sw-navy) 0%, var(--sw-navy-2) 100%);
+  color: #E8EEF6; border-radius: 18px; padding: 30px 32px; margin-bottom: 1.2rem;
+  box-shadow: 0 10px 30px rgba(11, 26, 46, 0.18);
+}
+.sw-hero h1 { color: #FFFFFF; margin: 4px 0 8px 0; font-size: 2.3rem; padding: 0; }
+.sw-hero p { margin: 0 0 12px 0; font-size: 1.02rem; line-height: 1.55; color: #C9D5E6; }
+.sw-eyebrow {
+  font-size: 0.72rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: #7FB0F5;
+}
+.sw-chip {
+  display: inline-block; padding: 3px 11px; margin: 6px 6px 0 0; border-radius: 999px;
+  font-size: 0.76rem; font-weight: 500; color: #DCE6F3;
+  background: rgba(255, 255, 255, 0.07); border: 1px solid rgba(255, 255, 255, 0.16);
+}
+.sw-panel {
+  background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px; padding: 16px 18px; align-self: center;
+}
+.sw-panel .sw-eyebrow { color: #A9B8CC; }
+.sw-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 18px; margin-top: 10px; }
+.sw-stats div b { display: block; font-size: 1.55rem; font-weight: 750; color: #FFFFFF; letter-spacing: -0.02em; }
+.sw-stats div span { font-size: 0.76rem; color: #A9B8CC; }
+.sw-estado { margin-top: 12px; font-size: 0.78rem; color: #C9D5E6; }
+.sw-punto {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--sw-amber); margin-right: 6px; box-shadow: 0 0 0 3px rgba(242, 165, 65, 0.25);
+}
+
+/* Cabecera de página */
+.sw-head { margin: 0 0 1.1rem 0; }
+.sw-head .sw-eyebrow { color: var(--sw-primary); }
+.sw-head h1 { margin: 2px 0 6px 0; padding: 0; font-size: 2rem; color: var(--sw-ink); }
+.sw-head p { margin: 0; color: var(--sw-muted); font-size: 0.98rem; max-width: 900px; }
+.sw-tag {
+  display: inline-block; padding: 2px 9px; margin: 10px 6px 0 0; border-radius: 6px;
+  font-size: 0.74rem; font-weight: 500; color: #33475F; background: #E9EEF5;
+  border: 1px solid #DCE3EC;
+}
+
+/* Título de sección */
+.sw-sec { margin: 1.6rem 0 0.7rem 0; }
+.sw-sec h3 { margin: 0; padding: 0; font-size: 1.12rem; color: var(--sw-ink); }
+.sw-sec p { margin: 2px 0 0 0; color: var(--sw-muted); font-size: 0.9rem; }
+
+/* Pasos del método */
+.sw-pasos { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.sw-paso {
+  position: relative; background: var(--sw-card); border: 1px solid var(--sw-line);
+  border-radius: 12px; padding: 16px; box-shadow: var(--sw-shadow);
+}
+.sw-paso .n {
+  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+  border-radius: 8px; background: #E8F0FA; color: var(--sw-primary); font-weight: 700;
+  font-size: 0.85rem; margin-bottom: 8px;
+}
+.sw-paso b { display: block; color: var(--sw-ink); margin-bottom: 4px; }
+.sw-paso span { color: var(--sw-muted); font-size: 0.86rem; line-height: 1.45; }
+
+/* Dos preguntas */
+.sw-dos { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.sw-q {
+  background: var(--sw-card); border: 1px solid var(--sw-line); border-radius: 12px;
+  padding: 18px; box-shadow: var(--sw-shadow); border-left: 4px solid var(--sw-primary);
+}
+.sw-q.alt { border-left-color: var(--sw-amber); }
+.sw-q .sw-eyebrow { color: var(--sw-muted); }
+.sw-q b { display: block; font-size: 1.05rem; color: var(--sw-ink); margin: 4px 0 6px 0; }
+.sw-q span { color: var(--sw-muted); font-size: 0.9rem; line-height: 1.5; }
+
+.sw-nota {
+  font-size: 0.82rem; color: var(--sw-muted); border-top: 1px solid var(--sw-line);
+  padding-top: 12px; margin-top: 1.6rem;
+}
+
+@media (max-width: 900px) {
+  .sw-hero, .sw-dos { grid-template-columns: 1fr; }
+  .sw-pasos { grid-template-columns: 1fr 1fr; }
+}

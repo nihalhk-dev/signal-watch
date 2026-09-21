@@ -427,3 +427,108 @@ def medir_retardo_con_inyeccion(
                     )
                 )
     return puntos
+
+
+# ── Una sola serie, para el laboratorio de la app ────────────────────
+#
+# La app (app/pages/3_Factores_de_mercado.py) deja al usuario inyectar una
+# caída sobre ruido real y ver cuándo salta cada detector. La lógica vive
+# aquí y no en la app (R6): la app solo llama y dibuja. Usa exactamente las
+# mismas piezas que la medición seria (bootstrap de la referencia, las
+# funciones de inyección del Bloque 2, los detectores con sus umbrales ya
+# calibrados), así que lo que se ve en pantalla es un caso concreto de lo
+# que las tablas promedian sobre 1000 series.
+
+
+def demo_inyeccion(
+    obs_referencia: list[MetricObservation],
+    umbrales: dict[str, float],
+    k_cusum: float,
+    delta_page_hinkley: float,
+    escenario: str,
+    delta_sigma: float,
+    tau: int,
+    horizonte: int,
+    bootstrap_bloque: int,
+    semilla: int,
+) -> dict:
+    """Fabrica UNA serie de ruido real con una caída en τ y la pasa por cada
+    detector. Devuelve los valores y, por detector, el mes de su primera
+    alarma y cómo leerla.
+
+    Convenio de tiempo, el mismo que evaluation/arl.py: el instante de una
+    alarma es `alarma.t + 1` (observaciones consumidas). Si es ≤ τ, la alarma
+    llegó antes del cambio: es una falsa alarma, no una detección.
+    """
+    if escenario not in INYECTORES:
+        raise ValueError(f"Escenario de inyección desconocido: {escenario}")
+    ruido = ruido_empirico(obs_referencia)
+    mu0, sigma = ruido["mu0"], ruido["sigma"]
+    direction = obs_referencia[0].direction
+    signo = -1.0 if direction == Direction.LOWER_IS_WORSE else 1.0
+
+    serie = series_nulas_bootstrap(obs_referencia, 1, tau + horizonte, bootstrap_bloque, semilla)[0]
+    valores = np.array([o.value for o in serie], dtype=float)
+    nuevos = INYECTORES[escenario](valores.copy(), tau, signo * delta_sigma, sigma)
+    obs = [o.model_copy(update={"value": float(v), "stream_id": "demo"}) for o, v in zip(serie, nuevos)]
+
+    # El nivel "verdadero" que se ha inyectado (sin ruido), para dibujarlo:
+    # se obtiene aplicando la misma inyección a una serie constante en mu0.
+    nivel = INYECTORES[escenario](np.full(len(valores), mu0), tau, signo * delta_sigma, sigma)
+    resultado = {"valores": [float(v) for v in nuevos], "nivel": [float(v) for v in nivel],
+                 "tau": tau, "mu0": mu0, "sigma": sigma, "detectores": {}}
+    for nombre, umbral in umbrales.items():
+        det = fabricar_detector(nombre, umbral, mu0, sigma, direction, k_cusum, delta_page_hinkley)
+        alarmas = det.procesar_serie(obs)
+        if not alarmas:
+            resultado["detectores"][nombre] = {"instante": None, "retardo": None,
+                                               "lectura": "no alarma en todo el horizonte"}
+            continue
+        instante = alarmas[0].t + 1
+        if instante <= tau:
+            resultado["detectores"][nombre] = {"instante": instante, "retardo": None,
+                                               "lectura": "falsa alarma ANTES del cambio"}
+        else:
+            resultado["detectores"][nombre] = {"instante": instante, "retardo": instante - tau,
+                                               "lectura": f"detecta {instante - tau} meses después del cambio"}
+    return resultado
+
+
+def distribucion_retardos(
+    obs_referencia: list[MetricObservation],
+    umbrales: dict[str, float],
+    k_cusum: float,
+    delta_page_hinkley: float,
+    escenario: str,
+    delta_sigma: float,
+    tau: int,
+    horizonte: int,
+    bootstrap_bloque: int,
+    n_series: int,
+    semilla_base: int,
+) -> list[dict]:
+    """Monte Carlo pequeño para el laboratorio: la DISTRIBUCIÓN del retardo,
+    no solo su media.
+
+    Repite demo_inyeccion con n_series semillas consecutivas y devuelve una
+    fila por (serie, detector) con el retardo o con qué pasó si no hubo
+    detección. Las tablas selladas dan la media sobre 1000 series; esto
+    enseña la dispersión, que es lo que hace entender por qué un solo caso
+    no prueba nada.
+    """
+    filas = []
+    for i in range(n_series):
+        r = demo_inyeccion(
+            obs_referencia, umbrales, k_cusum, delta_page_hinkley, escenario,
+            delta_sigma, tau, horizonte, bootstrap_bloque, semilla_base + i,
+        )
+        for nombre, info in r["detectores"].items():
+            if info["instante"] is None:
+                resultado = "no detecta"
+            elif info["retardo"] is None:
+                resultado = "falsa alarma antes de τ"
+            else:
+                resultado = "detecta"
+            filas.append({"serie": i, "detector": nombre, "resultado": resultado,
+                          "retardo_meses": info["retardo"]})
+    return filas
