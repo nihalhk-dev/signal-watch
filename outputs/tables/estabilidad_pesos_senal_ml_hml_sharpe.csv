@@ -1,0 +1,7 @@
+caracteristica,peso_hasta_1990,peso_desde_1991,mismo_signo,config_hash,commit,hash_datos,generado_en
+hml_1m,0.3674,0.3273,True,c1c7ebb7a0ce,f40c3d3,bdce90482268,2026-09-22T11:25:40+00:00
+hml_3m,-0.1982,-0.0666,True,c1c7ebb7a0ce,f40c3d3,bdce90482268,2026-09-22T11:25:40+00:00
+hml_12m,0.2064,0.1364,True,c1c7ebb7a0ce,f40c3d3,bdce90482268,2026-09-22T11:25:40+00:00
+hml_vol_3m,0.3095,0.0568,True,c1c7ebb7a0ce,f40c3d3,bdce90482268,2026-09-22T11:25:40+00:00
+mkt_12m,0.0258,-0.1432,False,c1c7ebb7a0ce,f40c3d3,bdce90482268,2026-09-22T11:25:40+00:00
+mkt_vol_3m,-0.1911,-0.2917,True,c1c7ebb7a0ce,f40c3d3,bdce90482268,2026-09-22T11:25:40+00:00
