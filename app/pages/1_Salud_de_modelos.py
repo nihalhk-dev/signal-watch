@@ -96,17 +96,26 @@ for stream_id, r in resumenes.items():
         # su tabla resumen_<stream>.csv enseña si el modelo le gana o no.
         frente = cargar_tabla(f"resumen_{stream_id}")
         if frente is not None:
-            with st.expander("El modelo frente al baseline (siempre largo)", icon=":material/compare_arrows:"):
+            with st.expander("¿Es bueno el modelo? Frente a sus listones", icon=":material/compare_arrows:"):
                 st.dataframe(
                     frente[["modelo", "tramo", "desde", "hasta", "meses", "acierto",
-                            "sharpe_anual_bruto", "sharpe_anual_neto", "cambios_por_ano"]]
+                            "sharpe_anual_bruto", "sharpe_anual_neto", "cambios_por_ano", "psr_neto_vs_0"]]
                     .rename(columns={"sharpe_anual_bruto": "Sharpe bruto", "sharpe_anual_neto": "Sharpe neto",
-                                     "cambios_por_ano": "cambios/año"}),
+                                     "cambios_por_ano": "cambios/año", "psr_neto_vs_0": "PSR vs 0"}),
                     hide_index=True,
                 )
-                st.caption("Acierto del baseline = fracción de meses en que HML sube. El monitor "
-                           "vigila el Sharpe NETO del modelo; si el modelo tiene habilidad o no, lo "
-                           "dice esta tabla (y el Deflated Sharpe), no los detectores.")
+                st.caption("Filas «ML − …»: diferencia de retornos mensuales netos; su PSR ≥ 0,95 "
+                           "querría decir que el ML le gana de verdad a ese listón. El monitor vigila "
+                           "el Sharpe NETO del modelo; si el modelo tiene habilidad lo dice esta tabla, "
+                           "no los detectores.")
+                estab = cargar_tabla(f"estabilidad_pesos_{stream_id}")
+                if estab is not None:
+                    st.dataframe(estab.drop(columns=[c for c in ("config_hash", "hash_datos", "commit",
+                                                                 "generado_en") if c in estab]),
+                                 hide_index=True)
+                    st.caption("Pesos del modelo entrenado en dos tramos que no se solapan. Un efecto "
+                               "real mantiene el signo; con 6 características, ~3 coincidencias es lo "
+                               "que daría el azar.")
 
         with st.expander("Huella de reproducibilidad (R7)", icon=":material/fingerprint:"):
             if r["huella"]:

@@ -31,7 +31,14 @@ Diseño, cada decisión por una razón:
     serie mensual.
   · Costes: cada cambio de posición paga coste_pb por unidad de rotación
     (pasar de +1 a −1 es rotación 2). El stream vigilado es el NETO.
-  · Baseline ingenuo: estar siempre largo (= HML). Con los mismos costes.
+  · Dos listones, con los mismos costes: estar siempre largo (= HML) y la
+    regla de una línea "largo si HML subió en los últimos 12 meses". Si la
+    regla hace lo mismo que la logística, el ML no aporta nada.
+  · ¿Es bueno? PSR (Mertens) de los retornos mensuales netos frente a 0 y,
+    sobre todo, de la DIFERENCIA ML − listón: ¿le gana de verdad o por
+    suerte? ¿Es estable? El modelo se entrena en dos tramos disjuntos
+    (antes y después de fin_calibracion): si los signos de los pesos no
+    coinciden, lo que aprende es ruido.
 
 Todos los parámetros salen de configs/streams/senal_ml_hml_sharpe.yaml.
 
@@ -57,6 +64,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from signal_watch.config import config_hash, huella_ejecucion, validate_keys
+from signal_watch.evaluation.deflated_sharpe import momentos, psr
 from signal_watch.gold.factor_metrics import (
     cargar_config,
     metrica_a_observaciones,
@@ -212,36 +220,109 @@ def _sharpe_anual(r: pd.Series) -> float:
     return float(r.mean() / r.std(ddof=1) * np.sqrt(252))
 
 
-def resumen(pred: pd.DataFrame, df_diario: pd.DataFrame, coste_pb: float,
+def _mensual(r_diario: pd.Series) -> pd.Series:
+    """Retorno mensual compuesto desde los diarios (como en deflated_sharpe)."""
+    return (1 + r_diario).groupby(r_diario.index.to_period("M").to_timestamp("M")).prod() - 1
+
+
+def _psr_vs_0(r_mensual: pd.Series) -> float:
+    m = momentos(r_mensual)
+    return psr(m["sr"], 0.0, m["T"], m["asimetria"], m["curtosis"])
+
+
+def posiciones_listones(pred: pd.DataFrame, tabla: pd.DataFrame) -> dict[str, pd.Series]:
+    """Los dos listones, con las mismas fechas que el ML.
+
+    La regla de momentum usa hml_12m al cierre del mes de la predicción:
+    exactamente la información que tenía el modelo, ni un dato más.
+    """
+    mom = tabla.loc[pred["fecha_prediccion"], "hml_12m"].to_numpy()
+    return {
+        "Siempre largo (baseline)": pd.Series(1, index=pred.index),
+        "Regla momentum 12m (baseline)": pd.Series(np.where(mom > 0, 1, -1), index=pred.index),
+    }
+
+
+def resumen(pred: pd.DataFrame, tabla: pd.DataFrame, df_diario: pd.DataFrame, coste_pb: float,
             fin_calibracion: str) -> pd.DataFrame:
-    """Acierto, Sharpe bruto y neto, y rotación: ML y siempre largo, por tramo.
+    """ML frente a los dos listones, por tramo, con su significancia.
+
+    Filas de modelo: acierto, Sharpe bruto y neto, rotación y PSR del retorno
+    mensual neto frente a 0. Filas "ML − listón": la DIFERENCIA de retornos
+    mensuales netos; su Sharpe es un ratio de información y su PSR contesta
+    "¿le gana de verdad?". El PSR usa N = 1: con más configuraciones probadas
+    solo podría bajar.
 
     Solo meses con resultado conocido: la última predicción (el mes en curso)
     se guarda en la tabla de predicciones, pero todavía no se puede evaluar.
     """
     pred = pred[pred["objetivo"].notna()]
-    siempre_largo = pd.Series(1, index=pred.index)
     corte = pd.Timestamp(fin_calibracion)
-    filas = []
-    for nombre, pos in (("ML (logística)", pred["posicion"]), ("Siempre largo (baseline)", siempre_largo)):
+    tramos = (("referencia", pred.index <= corte), ("vigilancia", pred.index > corte),
+              ("total", np.ones(len(pred), dtype=bool)))
+    estrategias = {"ML (logística)": pred["posicion"], **posiciones_listones(pred, tabla)}
+    netos_mensuales, aciertos, filas = {}, {}, []
+    for nombre, pos in estrategias.items():
         bruto = retornos_estrategia(df_diario, pos, 0.0)
         neto = retornos_estrategia(df_diario, pos, coste_pb)
-        acierto = ((pos > 0).astype(float) == pred["objetivo"]).where(pred["objetivo"].notna())
-        for tramo, sel in (("referencia", pred.index <= corte), ("vigilancia", pred.index > corte),
-                           ("total", np.ones(len(pred), dtype=bool))):
+        netos_mensuales[nombre] = _mensual(neto)
+        aciertos[nombre] = ((pos > 0).astype(float) == pred["objetivo"])
+        for tramo, sel in tramos:
             meses = pred.index[sel]
             dias = bruto.index.to_period("M").to_timestamp("M").isin(meses)
-            n_anos = len(meses) / 12
             filas.append({
                 "modelo": nombre, "tramo": tramo,
                 "desde": str(meses.min().date()), "hasta": str(meses.max().date()),
                 "meses": int(len(meses)),
-                "acierto": round(float(acierto[sel].mean()), 4),
+                "acierto": round(float(aciertos[nombre][sel].mean()), 4),
                 "sharpe_anual_bruto": round(_sharpe_anual(bruto[dias]), 4),
                 "sharpe_anual_neto": round(_sharpe_anual(neto[dias]), 4),
-                "cambios_por_ano": round(float((pos[sel].diff().abs() > 0).sum() / n_anos), 2),
+                "cambios_por_ano": round(float((pos[sel].diff().abs() > 0).sum() / (len(meses) / 12)), 2),
+                "psr_neto_vs_0": round(_psr_vs_0(netos_mensuales[nombre].loc[meses]), 4),
+            })
+    ml = "ML (logística)"
+    for liston in list(estrategias)[1:]:
+        dif = netos_mensuales[ml] - netos_mensuales[liston]
+        for tramo, sel in tramos:
+            meses = pred.index[sel]
+            m = momentos(dif.loc[meses])
+            filas.append({
+                "modelo": f"ML − {liston.split(' (')[0]}", "tramo": tramo,
+                "desde": str(meses.min().date()), "hasta": str(meses.max().date()),
+                "meses": int(len(meses)),
+                "acierto": round(float(aciertos[ml][sel].mean() - aciertos[liston][sel].mean()), 4),
+                "sharpe_anual_bruto": np.nan,
+                "sharpe_anual_neto": round(m["sr"] * np.sqrt(12), 4),
+                "cambios_por_ano": np.nan,
+                "psr_neto_vs_0": round(psr(m["sr"], 0.0, m["T"], m["asimetria"], m["curtosis"]), 4),
             })
     return pd.DataFrame(filas)
+
+
+def estabilidad_pesos(tabla: pd.DataFrame, caracteristicas: list[str], C: float,
+                      fin_calibracion: str) -> pd.DataFrame:
+    """Pesos del modelo entrenado en dos tramos que NO se solapan.
+
+    Por qué no basta con mirar los reentrenos: con ventana creciente, cada
+    reentreno comparte más del 90% de sus datos con el anterior, así que sus
+    pesos casi no pueden cambiar de signo AUNQUE el modelo ajuste ruido
+    (comprobado sobre ruido puro: "mismo signo" 0,85-1,0). La prueba que sí
+    discrimina es entrenar con datos disjuntos: si una característica tiene
+    un efecto real, su signo coincide en los dos tramos; si es ruido, es una
+    moneda al aire.
+    """
+    datos = tabla.dropna(subset=[*caracteristicas, "objetivo"])
+    corte = pd.Timestamp(fin_calibracion)
+    pesos = {}
+    for tramo, sel in (("hasta_" + fin_calibracion[:4], datos.index <= corte),
+                       ("desde_" + str(corte.year + 1), datos.index > corte)):
+        d = datos[sel]
+        pesos[tramo] = _modelo(C).fit(d[caracteristicas].to_numpy(),
+                                      d["objetivo"].to_numpy().astype(int))[-1].coef_[0]
+    a, b = pesos.values()
+    return pd.DataFrame({"caracteristica": caracteristicas,
+                         **{f"peso_{k}": np.round(v, 4) for k, v in pesos.items()},
+                         "mismo_signo": np.sign(a) == np.sign(b)})
 
 
 # ── 5. El stream ─────────────────────────────────────────────────────
@@ -258,21 +339,24 @@ def cargar_config_senal(stream_id: str = STREAM_POR_DEFECTO) -> dict[str, Any]:
 
 
 def construir_senal(stream_id: str = STREAM_POR_DEFECTO):
-    """Devuelve (observaciones, config, predicciones, resumen)."""
+    """Devuelve (observaciones, config, predicciones, resumen, estabilidad)."""
     cfg = cargar_config_senal(stream_id)
     s = cfg["senal"]
     df = factor_returns.recortar_muestra(cargar_factores_diarios(), cfg["inicio_muestra"])
-    pred = predecir_hacia_delante(tabla_mensual(df), list(s["caracteristicas"]), float(s["C"]),
+    tabla = tabla_mensual(df)
+    pred = predecir_hacia_delante(tabla, list(s["caracteristicas"]), float(s["C"]),
                                   int(s["meses_min_entrenamiento"]), int(s["mes_reentreno"]),
                                   float(s["umbral_probabilidad"]))
     neto = retornos_estrategia(df, pred["posicion"], float(s["coste_pb"]))
     metrica = factor_returns.sharpe_mensual(neto.to_frame(COLUMNA_SENAL), factor=COLUMNA_SENAL)
     obs = metrica_a_observaciones(metrica, stream_id, Direction(cfg["direction"]))
-    return obs, cfg, pred, resumen(pred, df, float(s["coste_pb"]), cfg["fin_calibracion"])
+    res = resumen(pred, tabla, df, float(s["coste_pb"]), cfg["fin_calibracion"])
+    estab = estabilidad_pesos(tabla, list(s["caracteristicas"]), float(s["C"]), cfg["fin_calibracion"])
+    return obs, cfg, pred, res, estab
 
 
 def main(stream_id: str = STREAM_POR_DEFECTO) -> None:
-    obs, cfg, pred, res = construir_senal(stream_id)
+    obs, cfg, pred, res, estab = construir_senal(stream_id)
     destino = ruta_stream(stream_id)
     save_metric_stream(obs, destino)
     if load_metric_stream(destino) != obs:
@@ -282,6 +366,7 @@ def main(stream_id: str = STREAM_POR_DEFECTO) -> None:
     tablas = PATHS.ensure(PATHS.outputs_tables)
     res.assign(**huella).to_csv(tablas / f"resumen_{stream_id}.csv", index=False)
     pred.reset_index().assign(**huella).to_csv(tablas / f"predicciones_{stream_id}.csv", index=False)
+    estab.assign(**huella).to_csv(tablas / f"estabilidad_pesos_{stream_id}.csv", index=False)
 
     print("=" * 72)
     print(f"SEÑAL DE ML — {stream_id}")
@@ -291,10 +376,18 @@ def main(stream_id: str = STREAM_POR_DEFECTO) -> None:
           f"reentrenos: {pred['fin_entrenamiento'].nunique()}")
     print(f"Stream gold:   {destino}  ({len(obs)} meses, ida y vuelta OK)")
     print(f"config_hash:   {config_hash(cfg)}")
-    print("\nML frente a estar siempre largo (mismos meses, mismos costes):\n")
-    print(res.to_string(index=False))
-    print("\nLectura: 'acierto' del baseline = fracción de meses en que HML sube.")
-    print("Si el ML no la supera con claridad, el modelo no tiene habilidad: se dice.")
+    with pd.option_context("display.width", 200):
+        print("\nML frente a los dos listones (mismos meses, mismos costes):\n")
+        print(res.to_string(index=False))
+        print("\nEstabilidad: pesos (características estandarizadas) entrenando en dos "
+              "tramos disjuntos:\n")
+        print(estab.to_string(index=False))
+    print("\nLectura:")
+    print("  · 'acierto' de 'Siempre largo' = fracción de meses en que HML sube.")
+    print("  · Filas 'ML − …': diferencia de retornos netos. Su PSR ≥ 0,95 querría decir")
+    print("    que el ML le gana de verdad; por debajo, la ventaja no se distingue de la suerte.")
+    print("  · 'mismo_signo': si una característica tiene efecto real, su peso tiene el mismo")
+    print("    signo en los dos tramos. Con 6 características, ~3 coincidencias es lo del azar.")
     print("=" * 72)
 
 
