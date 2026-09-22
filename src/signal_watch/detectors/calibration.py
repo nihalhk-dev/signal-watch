@@ -86,7 +86,10 @@ def medir_arl0(
             )
             alarma = detector.update(obs)
             if alarma is not None:
-                disparo = t
+                # Observaciones CONSUMIDAS, no el índice: una alarma en t=0
+                # es una racha de 1. Mismo convenio que evaluation/arl.py
+                # (el off-by-one de MEMORIA §8.5d, que aquí seguía vivo).
+                disparo = t + 1
                 break
 
         # si nunca se disparó, se censura al máximo simulado (subestima
