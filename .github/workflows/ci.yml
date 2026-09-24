@@ -1,0 +1,47 @@
+# Integración continua: en cada push y en cada pull request, GitHub ejecuta
+# la batería completa en una máquina limpia.
+#
+# Para qué sirve de verdad, más allá de la insignia verde del README: prueba
+# que el proyecto funciona FUERA del portátil de quien lo escribió. Es la
+# respuesta mecánica a "¿esto es real o solo va en tu máquina?".
+#
+# Lo que NO hace: regenerar el banco sintético ni las tablas de resultados
+# (son ~40 minutos y necesitan los datos crudos, que no se versionan). Los
+# tests no los necesitan: fabrican sus propios datos con semilla fija, y los
+# que dependen de artefactos del pipeline se saltan solos declarándolo.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # [app] entra porque el test de humo carga las páginas del panel con el
+      # AppTest oficial de Streamlit; [dev] trae pytest.
+      - name: Instalar el paquete
+        run: pip install -e ".[dev,app]"
+
+      - name: Ejecutar los tests
+        run: python -m pytest -q -rs --junitxml=informe_tests.xml
+
+      # Se sube siempre, también si algo falla: el informe es justamente lo
+      # que hay que mirar cuando falla.
+      - name: Guardar el informe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: informe-tests
+          path: informe_tests.xml

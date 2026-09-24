@@ -24,6 +24,11 @@ PAGINAS = ["Home.py", "pages/1_Salud_de_modelos.py", "pages/3_Factores_de_mercad
 def _requisitos(monkeypatch):
     if not (PATHS.outputs_tables / "alarmas_factor_hml_sharpe.csv").exists():
         pytest.skip("Faltan las tablas selladas: ejecuta el pipeline antes (run_monitoring.py).")
+    # El stream gold no se versiona (data/gold está en .gitignore), así que en
+    # un clon limpio —o en integración continua— no existe y las páginas no
+    # tienen serie que dibujar. Se declara en vez de fallar.
+    if not any(PATHS.data_gold_real.glob("*.parquet")):
+        pytest.skip("No hay streams gold en data/gold/real: ejecuta el pipeline antes.")
     # Streamlit pone en sys.path la carpeta del script principal (app/); al
     # probar una página suelta hay que hacerlo a mano para `from components import …`.
     monkeypatch.setattr(sys, "path", [str(APP), *sys.path])

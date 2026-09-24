@@ -2,8 +2,8 @@
 
 Ocupa el hueco del árbol reservado al informe MRM, y de ese informe tiene
 por ahora UNA parte: la evidencia de pruebas, que en validación de modelos
-(SR 11-7) es parte del expediente. El informe completo en PDF
-(reporting/mrm_report.py) sigue en el roadmap.
+(SR 11-7) es parte del expediente. El informe completo en PDF queda en el
+roadmap: no se construyó, y su archivo no está en el repositorio.
 
 Dos fuentes, y no se mezclan:
   · El informe SELLADO: outputs/tables/tests_junit.xml, escrito por
