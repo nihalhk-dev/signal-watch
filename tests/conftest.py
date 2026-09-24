@@ -4,6 +4,10 @@
 es la forma más corta de darle a un detector una serie cuyo comportamiento
 correcto se conoce de antemano (un salto en un instante elegido, una
 constante, etc.).
+
+`_huella_en_el_informe` sella el commit en el informe JUnit (R7): cuando se
+ejecuta `pytest --junitxml=outputs/tables/tests_junit.xml`, el informe dice
+con qué código se obtuvo. Sin --junitxml no hace nada.
 """
 
 from datetime import date, timedelta
@@ -25,3 +29,9 @@ def serie(valores, direction=Direction.LOWER_IS_WORSE, stream_id="test", se=0.01
 @pytest.fixture
 def hacer_serie():
     return serie
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _huella_en_el_informe(record_testsuite_property):
+    from signal_watch.config import obtener_commit
+    record_testsuite_property("commit", obtener_commit())

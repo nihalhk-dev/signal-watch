@@ -17,7 +17,7 @@ from streamlit.testing.v1 import AppTest  # noqa: E402
 
 APP = PATHS.root / "app"
 PAGINAS = ["Home.py", "pages/1_Salud_de_modelos.py", "pages/3_Factores_de_mercado.py",
-           "pages/4_Banco_de_pruebas.py"]
+           "pages/4_Banco_de_pruebas.py", "pages/6_Informe_MRM.py"]
 
 
 @pytest.fixture(autouse=True)

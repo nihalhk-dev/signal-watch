@@ -141,3 +141,60 @@ def umbrales_calibrados(stream_id: str) -> dict[str, float]:
     if calib is None:
         return {}
     return {r["detector"]: float(r["umbral"]) for _, r in calib.iterrows()}
+
+
+# ── Informe de tests (evidencia de validación) ───────────────────────
+
+INFORME_TESTS = "tests_junit.xml"
+
+
+def leer_informe_tests(ruta: Path | None = None) -> dict | None:
+    """Lee el informe JUnit que escribe `pytest --junitxml=...`.
+
+    Es el formato estándar de los sistemas de integración continua: no hay
+    código propio que genere el informe, solo pytest. Devuelve el resumen
+    (totales, duración, fecha, commit sellado por tests/conftest.py) y una
+    fila por test con su capa, archivo, estado y motivo. None si no existe.
+    """
+    import xml.etree.ElementTree as ET
+
+    ruta = Path(ruta) if ruta else PATHS.outputs_tables / INFORME_TESTS
+    if not ruta.exists():
+        return None
+    raiz = ET.parse(ruta).getroot()
+    suite = raiz if raiz.tag == "testsuite" else raiz.find("testsuite")
+    propiedades = {p.get("name"): p.get("value") for p in suite.iter("property")}
+
+    filas = []
+    for caso in suite.iter("testcase"):
+        clase, nombre = caso.get("classname", ""), caso.get("name", "")
+        # "tests.unit.test_cusum" → capa "unit", archivo "test_cusum"; un skip a
+        # nivel de módulo llega sin classname y con la ruta en el nombre.
+        partes = (clase or nombre.replace("/", ".").replace("\\", ".")).split(".")
+        capa = partes[1] if len(partes) > 1 and partes[0] == "tests" else "—"
+        archivo = next((p for p in partes if p.startswith("test_")), clase or nombre)
+        estado, motivo = "pasa", ""
+        for etiqueta, valor in (("failure", "falla"), ("error", "error"), ("skipped", "fuera de alcance")):
+            nodo = caso.find(etiqueta)
+            if nodo is not None:
+                estado, motivo = valor, (nodo.get("message") or "").strip()
+                # Un skip a nivel de módulo trae message="collection skipped" y el
+                # motivo real dentro del texto: "(ruta, línea, 'Skipped: …')".
+                texto = nodo.text or ""
+                if "Skipped: " in texto:
+                    motivo = texto.split("Skipped: ", 1)[1].rstrip("')\"\n ")
+        filas.append({"capa": capa, "archivo": archivo,
+                      "test": nombre if clase else "(módulo completo)",
+                      "estado": estado, "segundos": float(caso.get("time", 0) or 0), "motivo": motivo})
+
+    tabla = pd.DataFrame(filas)
+    cuenta = tabla["estado"].value_counts()
+    return {
+        "pasan": int(cuenta.get("pasa", 0)),
+        "fallan": int(cuenta.get("falla", 0) + cuenta.get("error", 0)),
+        "fuera_de_alcance": int(cuenta.get("fuera de alcance", 0)),
+        "duracion_s": float(suite.get("time", 0) or 0),
+        "fecha": suite.get("timestamp", "—"),
+        "commit": propiedades.get("commit", "—"),
+        "tabla": tabla,
+    }
