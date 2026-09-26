@@ -14,10 +14,17 @@ Qué hace, en orden:
   5. Mide el RETARDO sobre ruido real: inyecta una caída de tamaño conocido
      en un τ fijado sobre el bootstrap de la referencia (la única forma de
      medir retardo en una rama sin τ; ver evaluation/error_analysis.py).
-  6. Guarda tres tablas selladas con la huella R7:
+     Primero DENTRO de muestra: el ruido sale de los mismos meses que
+     calibraron; es la comparación a igual tasa de falsas alarmas.
+     Si la config trae `inyeccion.particion_tramo_meses`, lo repite FUERA DE
+     MUESTRA: calibra con años alternos (mitad A) e inyecta sobre los otros
+     (mitad B), y luego al revés. Ahí la pregunta es otra: ¿la tasa de
+     falsas alarmas prometida aguanta en años que el umbral no ha visto?
+  6. Guarda las tablas selladas con la huella R7:
        outputs/tables/calibracion_<stream>.csv
        outputs/tables/alarmas_<stream>.csv
-       outputs/tables/retardo_ruido_real_<stream>.csv
+       outputs/tables/retardo_ruido_real_<stream>.csv      (dentro de muestra)
+       outputs/tables/retardo_fuera_muestra_<stream>.csv   (si hay partición)
      y la figura oficial de la rama real (reporting/figures.py, R9):
        outputs/figures/rama_real_<stream>.png
 
@@ -40,7 +47,9 @@ from signal_watch.config import huella_ejecucion, validate_keys
 from signal_watch.evaluation.error_analysis import (
     calibrar_en_ruido_real,
     fabricar_detector,
+    indices_de,
     medir_retardo_con_inyeccion,
+    medir_retardo_fuera_de_muestra,
     ruido_empirico,
 )
 from signal_watch.gold.factor_metrics import cargar_config, ruta_stream
@@ -64,6 +73,39 @@ CLAVES_MONITORIZACION = {
 CLAVES_INYECCION = {
     "escenarios", "deltas_sigma", "tau_meses", "horizonte_meses", "n_series", "semilla",
 }
+# Opcional: si está, el retardo se mide fuera de muestra (ver docstring).
+CLAVE_PARTICION = "particion_tramo_meses"
+
+
+def _fila_retardo(stream_id: str, p) -> dict:
+    """Una fila de tabla de retardo. Mismas columnas que antes de añadir la
+    prueba fuera de muestra, para que la app y la figura no cambien."""
+    return {
+        "stream_id": stream_id, "detector": p.detector, "escenario": p.escenario,
+        "delta_sigma": p.delta_sigma, "delta_sharpe": p.delta_sharpe,
+        "arl1_meses": p.arl1, "arl1_ic_low": p.arl1_ic95[0],
+        "arl1_ic_high": p.arl1_ic95[1], "n_streams": p.n_streams,
+        "n_censurados": p.n_censurados, "n_excluidos_pre_tau": p.n_excluidos_pre_tau,
+        "n_series": p.n_series,
+    }
+
+
+def _imprimir_retardo(tabla, detectores, escenarios, n_series, sigma) -> None:
+    for escenario in escenarios:
+        sub = tabla[tabla["escenario"] == escenario]
+        piv = sub.pivot(index="detector", columns="delta_sigma", values="arl1_meses")
+        piv = piv.reindex(detectores)
+        piv.columns = [f"{d:g}σ ({d * sigma:.2f} SR)" for d in piv.columns]
+        print(f"\n{escenario} — retardo medio en MESES desde el cambio:")
+        print(piv.round(1).to_string())
+        cens = sub.pivot(index="detector", columns="delta_sigma", values="n_censurados")
+        excl = sub.pivot(index="detector", columns="delta_sigma", values="n_excluidos_pre_tau")
+        print(f"  censuradas por celda (de {n_series}): "
+              + ", ".join(f"{d}: {int(cens.loc[d].max())}" for d in detectores)
+              + " (máximo entre magnitudes)")
+        print("  excluidas por falsa alarma antes de τ: "
+              + ", ".join(f"{d}: {int(excl.loc[d].min())}-{int(excl.loc[d].max())}"
+                          for d in detectores))
 
 
 def main(stream_id: str = "factor_hml_sharpe") -> None:
@@ -75,7 +117,9 @@ def main(stream_id: str = "factor_hml_sharpe") -> None:
     if "inyeccion" not in cfg:
         raise KeyError(f"configs/streams/{stream_id}.yaml no tiene bloque 'inyeccion'")
     iny = cfg["inyeccion"]
-    validate_keys(iny, CLAVES_INYECCION, name=f"{stream_id}.yaml:inyeccion")
+    validate_keys({k: v for k, v in iny.items() if k != CLAVE_PARTICION},
+                  CLAVES_INYECCION, name=f"{stream_id}.yaml:inyeccion")
+    fuera_de_muestra = CLAVE_PARTICION in iny
     semillas = {mon["semilla_calibracion"], mon["semilla_verificacion"], iny["semilla"]}
     if len(semillas) != 3:
         raise ValueError("Calibración, verificación e inyección necesitan semillas distintas (R4).")
@@ -125,7 +169,7 @@ def main(stream_id: str = "factor_hml_sharpe") -> None:
     )
     config_efectiva = {"stream_id": stream_id, "fin_calibracion": cfg["fin_calibracion"],
                        **config_efectiva,
-                       "inyeccion": {k: iny[k] for k in sorted(CLAVES_INYECCION)}}
+                       "inyeccion": {k: iny[k] for k in sorted(iny)}}
 
     archivos_datos = [ruta, carpeta_french() / NOMBRE_ZIP]
     huella = huella_ejecucion(config_efectiva, archivos_datos)
@@ -137,9 +181,9 @@ def main(stream_id: str = "factor_hml_sharpe") -> None:
         ic = f"({c.arl0_ic95[0]:.0f}, {c.arl0_ic95[1]:.0f})"
         print(f"  {c.detector:<14}{c.umbral:>9.3f}{c.arl0_alcanzable:>12.1f}"
               f"{c.arl0_verificado:>13.1f}{ic:>16}{c.n_censurados:>7}/{c.n_series}")
-    print("  'alcanzable' = objetivo, salvo en Shewhart: una regla de UNA observación")
-    n_ref = len(referencia)
-    print(f"  sobre {n_ref} valores reales solo puede tener ARL0 = {n_ref}/j (ver error_analysis.py).")
+    print("  'alcanzable' = objetivo, salvo en Shewhart: una regla de UNA observación sobre")
+    print(f"  {len(referencia)} valores reales tiene el ARL0 a saltos; se toma el primer escalón que")
+    print("  no es más estricto que el objetivo, medido en calibración (ver error_analysis.py).")
     for c in calib.values():
         desvio = (c.arl0_verificado - c.arl0_alcanzable) / c.arl0_alcanzable
         if abs(desvio) > 0.10:
@@ -180,10 +224,7 @@ def main(stream_id: str = "factor_hml_sharpe") -> None:
     print("-" * 72)
     print("RETARDO SOBRE RUIDO REAL (caída inyectada en un τ conocido)")
     print("-" * 72)
-    print(f"τ = mes {iny['tau_meses']}, horizonte {iny['horizonte_meses']} meses, "
-          f"{iny['n_series']} series por celda. Umbrales: los calibrados arriba.", flush=True)
-    puntos = medir_retardo_con_inyeccion(
-        referencia, calib,
+    comunes = dict(
         k_cusum=float(mon["k_cusum"]),
         delta_page_hinkley=float(mon["delta_page_hinkley"]),
         escenarios=list(iny["escenarios"]),
@@ -191,36 +232,66 @@ def main(stream_id: str = "factor_hml_sharpe") -> None:
         tau=int(iny["tau_meses"]),
         horizonte=int(iny["horizonte_meses"]),
         n_series=int(iny["n_series"]),
-        bootstrap_bloque=int(mon["bootstrap_bloque_meses"]),
         semilla=int(iny["semilla"]),
     )
-    tabla_retardo = pd.DataFrame(
-        [
-            {
-                "stream_id": stream_id, "detector": p.detector, "escenario": p.escenario,
-                "delta_sigma": p.delta_sigma, "delta_sharpe": p.delta_sharpe,
-                "arl1_meses": p.arl1, "arl1_ic_low": p.arl1_ic95[0],
-                "arl1_ic_high": p.arl1_ic95[1], "n_streams": p.n_streams,
-                "n_censurados": p.n_censurados, "n_excluidos_pre_tau": p.n_excluidos_pre_tau,
-                "n_series": p.n_series, **huella,
-            }
-            for p in puntos
-        ]
+    print(f"τ = mes {iny['tau_meses']}, horizonte {iny['horizonte_meses']} meses, "
+          f"{iny['n_series']} series por celda. Umbrales: los calibrados arriba.", flush=True)
+    print("DENTRO DE MUESTRA: el ruido de inyección sale de los mismos 330 meses que")
+    print("calibraron. Es la comparación a IGUAL tasa de falsas alarmas.")
+    puntos = medir_retardo_con_inyeccion(
+        referencia, calib,
+        bootstrap_bloque=int(mon["bootstrap_bloque_meses"]),
+        **comunes,
     )
-    for escenario in iny["escenarios"]:
-        sub = tabla_retardo[tabla_retardo["escenario"] == escenario]
-        tabla = sub.pivot(index="detector", columns="delta_sigma", values="arl1_meses")
-        tabla = tabla.reindex(list(calib))
-        tabla.columns = [f"{d:g}σ ({d * r['sigma']:.2f} SR)" for d in tabla.columns]
-        print(f"\n{escenario} — retardo medio en MESES desde el cambio:")
-        print(tabla.round(1).to_string())
-        cens = sub.pivot(index="detector", columns="delta_sigma", values="n_censurados")
-        excl = sub.pivot(index="detector", columns="delta_sigma", values="n_excluidos_pre_tau")
-        print(f"  censuradas por celda (de {iny['n_series']}): "
-              + ", ".join(f"{d}: {int(cens.loc[d].max())}" for d in calib)
-              + " (máximo entre magnitudes)")
-        print(f"  excluidas por falsa alarma antes de τ: "
-              + ", ".join(f"{d}: {int(excl.loc[d].min())}-{int(excl.loc[d].max())}" for d in calib))
+    tabla_retardo = pd.DataFrame([{**_fila_retardo(stream_id, p), **huella} for p in puntos])
+    _imprimir_retardo(tabla_retardo, list(calib), iny["escenarios"], iny["n_series"], r["sigma"])
+
+    tabla_fdm = None
+    if fuera_de_muestra:
+        print("\n" + "-" * 72)
+        print("RETARDO FUERA DE MUESTRA (calibrar con unos años, inyectar en otros)")
+        print("-" * 72)
+        filas = []
+        for invertir in (False, True):
+            fdm = medir_retardo_fuera_de_muestra(
+                referencia,
+                arl0_objetivo=float(mon["arl0_objetivo_meses"]),
+                bootstrap_bloque=int(mon["bootstrap_bloque_meses"]),
+                bootstrap_longitud=int(mon["bootstrap_longitud_meses"]),
+                bootstrap_n_series=int(mon["bootstrap_n_series"]),
+                semilla_calibracion=int(mon["semilla_calibracion"]),
+                semilla_verificacion=int(mon["semilla_verificacion"]),
+                tramo_meses=int(iny[CLAVE_PARTICION]),
+                invertir=invertir,
+                **comunes,
+            )
+            n_c, n_i = len(indices_de(fdm.tramos_calibra)), len(indices_de(fdm.tramos_inyecta))
+            print(f"\n{fdm.direccion}: calibra con {n_c} meses, inyecta sobre otros {n_i}; "
+                  "ningún mes en los dos.")
+            print(f"  mu0 {fdm.mu0_calibra:.3f} · sigma {fdm.sigma_calibra:.3f} en la mitad que "
+                  f"calibra (referencia entera: {r['mu0']:.3f} · {r['sigma']:.3f})")
+            print(f"  {'detector':<14}{'umbral':>9}{'ARL0 calibra':>14}{'ARL0 inyecta':>14}")
+            for n, c in fdm.calibraciones.items():
+                print(f"  {n:<14}{c.umbral:>9.3f}{c.arl0_verificado:>14.1f}"
+                      f"{fdm.arl0_ruido_inyeccion[n]:>14.1f}")
+            sub = pd.DataFrame([_fila_retardo(stream_id, p) for p in fdm.puntos])
+            _imprimir_retardo(sub, list(calib), iny["escenarios"], iny["n_series"], r["sigma"])
+            for p in fdm.puntos:
+                c = fdm.calibraciones[p.detector]
+                filas.append({
+                    **_fila_retardo(stream_id, p),
+                    "direccion": fdm.direccion,
+                    "umbral": c.umbral,
+                    "arl0_calibra": c.arl0_verificado,
+                    "arl0_ruido_inyeccion": fdm.arl0_ruido_inyeccion[p.detector],
+                    **huella,
+                })
+        tabla_fdm = pd.DataFrame(filas)
+        print("\n  CÓMO LEER ESTO: fuera de muestra los detectores dejan de tener la misma")
+        print("  tasa de falsas alarmas ('ARL0 inyecta'). Sus retardos ya NO se comparan")
+        print("  como una carrera: el que salta a menudo 'detecta' pronto aunque no haya")
+        print("  nada (mira sus excluidas antes de τ). Lo que responde esta prueba es la")
+        print("  columna 'ARL0 inyecta': ¿la tasa prometida aguanta en años no vistos?")
     print("\n  'SR' = el tamaño del cambio en Sharpe anualizado.")
     if stream_id == "factor_hml_sharpe":
         print("  0,15σ ≈ el factor pasa a Sharpe cero; 0,25σ ≈ la caída media de los 2010.")
@@ -244,9 +315,12 @@ def main(stream_id: str = "factor_hml_sharpe") -> None:
     ruta_calib = destino / f"calibracion_{stream_id}.csv"
     ruta_alarmas = destino / f"alarmas_{stream_id}.csv"
     ruta_retardo = destino / f"retardo_ruido_real_{stream_id}.csv"
+    ruta_fdm = destino / f"retardo_fuera_muestra_{stream_id}.csv"
     tabla_calib.to_csv(ruta_calib, index=False)
     a_dataframe(eventos).to_csv(ruta_alarmas, index=False)
     tabla_retardo.to_csv(ruta_retardo, index=False)
+    if tabla_fdm is not None:
+        tabla_fdm.to_csv(ruta_fdm, index=False)
 
     # La figura oficial de la rama real: la dibuja reporting/figures.py (R9),
     # la guarda el script. Se construye desde las MISMAS tablas que se acaban
@@ -274,6 +348,8 @@ def main(stream_id: str = "factor_hml_sharpe") -> None:
     print(f"Guardado: {ruta_calib}")
     print(f"Guardado: {ruta_alarmas}")
     print(f"Guardado: {ruta_retardo}")
+    if tabla_fdm is not None:
+        print(f"Guardado: {ruta_fdm}")
     print(f"Guardado: {ruta_figura}")
     print(f"Huella:   config_hash={huella['config_hash']}  hash_datos={huella['hash_datos']}  "
           f"commit={huella['commit']}")

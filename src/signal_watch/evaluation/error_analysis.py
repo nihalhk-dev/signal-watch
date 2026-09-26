@@ -54,6 +54,14 @@ Se reutiliza `_calibrar_umbral_biseccion` de `evaluation/delay_curves.py`
 tal cual —el mismo código que produjo los resultados del Bloque 4—, en vez
 de escribir una segunda bisección que pudiera divergir de la primera.
 
+Retardo fuera de muestra
+────────────────────────
+Para medir el RETARDO sobre ruido real hay que inyectar un cambio en series
+de ruido. Si ese ruido sale de los mismos meses con los que se calibró el
+umbral, el detector juega en casa. Por eso el experimento de retardo parte
+la referencia en años alternos: una mitad calibra, la otra pone el ruido,
+y luego al revés. Ver medir_retardo_fuera_de_muestra.
+
 Limitación declarada
 ────────────────────
 El bootstrap supone que 1963-1990 es un tramo sin cambios. No lo es del
@@ -111,29 +119,121 @@ def ruido_empirico(obs: list[MetricObservation]) -> dict[str, float]:
 
 # ── Series nulas por bootstrap ───────────────────────────────────────
 
+Tramo = tuple[int, int]  # [inicio, fin) en índices de la referencia
+
+
+def particion_intercalada(n: int, tramo: int, minimo: int) -> tuple[list[Tramo], list[Tramo]]:
+    """Parte los n meses de la referencia en tramos de `tramo` meses y los
+    reparte alternando: pares -> mitad A (calibra), impares -> mitad B
+    (ruido para inyectar).
+
+    Por qué intercalada y no "primera mitad / segunda mitad": 1963-1976 y
+    1977-1990 no tienen el mismo Sharpe. Partir por la mitad mezclaría la
+    separación con un cambio de régimen; alternando años, las dos mitades
+    ven las mismas épocas.
+
+    Un último tramo más corto que `minimo` (el bloque del bootstrap) se
+    descarta de las dos mitades: no cabe un bloque entero dentro de él.
+    """
+    if tramo < minimo:
+        raise ValueError(f"Tramos de {tramo} meses no caben bloques de {minimo}.")
+    a: list[Tramo] = []
+    b: list[Tramo] = []
+    for i, inicio in enumerate(range(0, n, tramo)):
+        fin = min(inicio + tramo, n)
+        if fin - inicio < minimo:
+            continue
+        (a if i % 2 == 0 else b).append((inicio, fin))
+    return a, b
+
+
+def indices_de(tramos: list[Tramo]) -> np.ndarray:
+    """Todos los índices de la referencia que caen dentro de `tramos`."""
+    return np.concatenate([np.arange(s, e) for s, e in tramos])
+
+
+def subconjunto(obs: list[MetricObservation], tramos: list[Tramo] | None) -> list[MetricObservation]:
+    """Las observaciones de `tramos` (todas, si no hay tramos)."""
+    return obs if tramos is None else [obs[i] for i in indices_de(tramos)]
+
+
+def bloques_candidatos(tramos: list[Tramo], bloque: int) -> np.ndarray:
+    """Todos los bloques que el bootstrap puede sortear dentro de `tramos`,
+    uno por fila.
+
+    Bootstrap CIRCULAR dentro de cada tramo (Politis y Romano, 1992): un
+    bloque que llega al final de su tramo sigue por el principio del mismo
+    tramo, nunca salta al siguiente (que es de la otra mitad). Con bloques
+    móviles normales, los meses del borde de cada tramo saldrían mucho menos
+    que los del centro; con el circular, cada mes sale exactamente en
+    `bloque` de los candidatos. Así el ruido fabricado es el de la mitad,
+    sin meses que pesen más que otros por dónde caen dentro del tramo.
+    """
+    filas = []
+    for s, e in tramos:
+        largo = e - s
+        if bloque > largo:
+            raise ValueError(f"Bloque de {bloque} meses en un tramo de {largo}.")
+        for off in range(largo):
+            filas.append(s + (off + np.arange(bloque)) % largo)
+    return np.array(filas)
+
+
+def indices_bootstrap(
+    n: int,
+    n_series: int,
+    longitud: int,
+    bloque: int,
+    semilla: int,
+    tramos: list[Tramo] | None = None,
+) -> list[np.ndarray]:
+    """Índices de la referencia que forman cada serie fabricada.
+
+    Sin `tramos`: bloques móviles sobre toda la referencia. Es el código de
+    siempre, con las mismas llamadas al generador, así que la calibración
+    de producción sale idéntica bit a bit (lo comprueba un test).
+
+    Con `tramos`: solo bloques de dentro de esos tramos (ver
+    bloques_candidatos). Así una mitad nunca ve un mes de la otra.
+    """
+    if bloque >= n:
+        raise ValueError(f"Bloque de {bloque} meses con solo {n} meses de referencia.")
+    rng = np.random.default_rng(semilla)
+    n_bloques = -(-longitud // bloque)  # techo de la división
+
+    if tramos is None:
+        inicios_posibles = n - bloque + 1
+        salida = []
+        for _ in range(n_series):
+            inicios = rng.integers(0, inicios_posibles, size=n_bloques)
+            salida.append(np.concatenate([np.arange(s, s + bloque) for s in inicios])[:longitud])
+        return salida
+
+    candidatos = bloques_candidatos(tramos, bloque)
+    return [
+        candidatos[rng.integers(0, len(candidatos), size=n_bloques)].ravel()[:longitud]
+        for _ in range(n_series)
+    ]
+
+
 def series_nulas_bootstrap(
     obs: list[MetricObservation],
     n_series: int,
     longitud: int,
     bloque: int,
     semilla: int,
+    tramos: list[Tramo] | None = None,
 ) -> list[list[MetricObservation]]:
-    """Bootstrap de bloques móviles sobre la ventana de referencia.
+    """Bootstrap por bloques sobre la ventana de referencia (o sobre una de
+    sus mitades, si se pasan `tramos`).
 
     Cada serie fabricada reindexa `t` desde 0: `medir_arl0` cuenta el
     tiempo hasta la alarma a partir de `t`, igual que en el banco sintético.
     """
-    n = len(obs)
-    if bloque >= n:
-        raise ValueError(f"Bloque de {bloque} meses con solo {n} meses de referencia.")
-    rng = np.random.default_rng(semilla)
-    n_bloques = -(-longitud // bloque)  # techo de la división
-    inicios_posibles = n - bloque + 1
-
     series = []
-    for i in range(n_series):
-        inicios = rng.integers(0, inicios_posibles, size=n_bloques)
-        indices = np.concatenate([np.arange(s, s + bloque) for s in inicios])[:longitud]
+    for i, indices in enumerate(
+        indices_bootstrap(len(obs), n_series, longitud, bloque, semilla, tramos)
+    ):
         series.append(
             [
                 obs[j].model_copy(update={"t": t, "stream_id": f"bootstrap_{i:04d}"})
@@ -168,44 +268,44 @@ def fabricar_detector(
     raise ValueError(f"Detector desconocido: {nombre}")
 
 
-def _umbral_shewhart_por_cuantil(
+def _umbral_shewhart_escalon(
     obs: list[MetricObservation],
     mu0: float,
     sigma: float,
     direction: Direction,
-    arl0_objetivo: float,
-) -> tuple[float, float]:
-    """El umbral de Shewhart NO se puede calibrar por bisección aquí. Por qué:
+    j: int,
+) -> float:
+    """Umbral de Shewhart que deja exactamente j valores de la referencia
+    por el lado malo: a medio camino entre el j-ésimo más extremo y el
+    siguiente.
 
-    Shewhart mira cada observación por separado: alarma si UN valor pasa del
-    umbral. Sobre series fabricadas remuestreando n = 330 valores reales, la
-    probabilidad de alarma en cada paso es exactamente j/n, donde j es
-    cuántos de esos 330 valores quedan más allá del umbral. El ARL0 solo
-    puede valer n/j: 330, 165, 110, 82,5... **Un ARL0 de 120 no existe.**
-    La bisección salta entre 110 y 165 según el ruido del conjunto de
-    calibración, y en verificación cae en el otro escalón (lo vimos: umbral
+    Por qué Shewhart NO se calibra por bisección. Shewhart mira cada
+    observación por separado: alarma si UN valor pasa del umbral. Sobre
+    series fabricadas remuestreando n valores reales, mover el umbral solo
+    cambia algo cuando cruza uno de esos n valores. El ARL0 va a saltos, uno
+    por cada j = 1, 2, 3...: **un ARL0 de 120 exacto no existe.** La
+    bisección salta entre dos escalones según el ruido del conjunto de
+    calibración, y en verificación cae en el otro (lo vimos: umbral
     calibrado a "120", verificado a 153).
 
-    Así que se elige el escalón alcanzable más cercano al objetivo
-    (j = round(n / objetivo)) y se pone el umbral a medio camino entre el
-    j-ésimo valor más extremo y el siguiente. Y se declara el ARL0
-    ALCANZABLE, no el objetivo.
+    Cuánto vale cada escalón NO se supone: se mide (ver calibrar_en_ruido_real).
+    La cuenta de manual, ARL0 = n/j, solo vale si los j meses extremos están
+    separados. Si dos son vecinos, un bloque del bootstrap que trae uno trae
+    también el otro: las alarmas llegan en racimos y el ARL0 sube. Pasó en la
+    mitad A de HML: n/j = 168/2 = 84 sobre el papel, 107 medido.
 
     La lección de fondo, que es un argumento a favor del CUSUM: la tasa de
     falsas alarmas de una regla de una sola observación la deciden los
-    tres o cuatro meses más extremos de 27 años de historia. El CUSUM
-    acumula muchas observaciones moderadas, y su tasa depende del grueso
-    de la distribución, no de su cola más fina, que es justo la parte peor
-    estimada.
+    tres o cuatro meses más extremos de 27 años de historia (y hasta si son
+    vecinos o no). El CUSUM acumula muchas observaciones moderadas, y su
+    tasa depende del grueso de la distribución, no de su cola más fina, que
+    es justo la parte peor estimada.
     """
     x = np.array([o.value for o in obs], dtype=float)
     z = (x - mu0) / sigma
     malo = -z if direction == Direction.LOWER_IS_WORSE else z
     ordenado = np.sort(malo)[::-1]  # más extremo primero
-    n = len(ordenado)
-    j = int(np.clip(round(n / arl0_objetivo), 1, n - 1))
-    umbral = float((ordenado[j - 1] + ordenado[j]) / 2)
-    return umbral, n / j
+    return float((ordenado[j - 1] + ordenado[j]) / 2)
 
 
 @dataclass(frozen=True)
@@ -214,7 +314,7 @@ class Calibracion:
 
     detector: str
     umbral: float
-    arl0_alcanzable: float   # = objetivo salvo en Shewhart (ver _umbral_shewhart_por_cuantil)
+    arl0_alcanzable: float   # = objetivo salvo en Shewhart (ver _umbral_shewhart_escalon)
     arl0_verificado: float
     arl0_ic95: tuple[float, float]
     n_censurados: int
@@ -231,10 +331,15 @@ def calibrar_en_ruido_real(
     bootstrap_n_series: int,
     semilla_calibracion: int,
     semilla_verificacion: int,
+    tramos: list[Tramo] | None = None,
 ) -> tuple[dict[str, Calibracion], dict, float]:
     """Calibra CUSUM, Page-Hinkley y Shewhart al MISMO ARL0 sobre ruido real.
 
     Devuelve (calibraciones, config_efectiva, arl0_tres_sigma_clasico).
+
+    Con `tramos`, todo (mu0, sigma, el cuantil de Shewhart y los dos
+    bootstraps) sale SOLO de esos meses de la referencia. Es lo que usa el
+    experimento de retardo fuera de muestra: calibrar con la mitad A.
 
     Los tres al mismo ARL0 porque comparar detectores con tasas de falsa
     alarma distintas no significa nada (MEMORIA §8.6). Shewhart incluido:
@@ -247,17 +352,18 @@ def calibrar_en_ruido_real(
     if semilla_calibracion == semilla_verificacion:
         raise ValueError("Calibración y verificación necesitan semillas distintas (R4).")
 
-    ruido = ruido_empirico(obs_referencia)
+    propios = subconjunto(obs_referencia, tramos)
+    ruido = ruido_empirico(propios)
     mu0, sigma = ruido["mu0"], ruido["sigma"]
     direction = obs_referencia[0].direction
 
     nulas_calib = series_nulas_bootstrap(
         obs_referencia, bootstrap_n_series, bootstrap_longitud,
-        bootstrap_bloque, semilla_calibracion,
+        bootstrap_bloque, semilla_calibracion, tramos,
     )
     nulas_verif = series_nulas_bootstrap(
         obs_referencia, bootstrap_n_series, bootstrap_longitud,
-        bootstrap_bloque, semilla_verificacion,
+        bootstrap_bloque, semilla_verificacion, tramos,
     )
 
     def fabrica(nombre):
@@ -269,9 +375,16 @@ def calibrar_en_ruido_real(
     arl0_alcanzable: dict[str, float] = {}
     for nombre, (u_min, u_max) in RANGOS_UMBRAL.items():
         if nombre == "Shewhart":
-            umbral, alcanzable = _umbral_shewhart_por_cuantil(
-                obs_referencia, mu0, sigma, direction, arl0_objetivo
-            )
+            # El primer escalón que NO es más estricto que el objetivo, con su
+            # ARL0 MEDIDO en las series de calibración. "No más estricto" y no
+            # "el más cercano": si Shewhart quedara con menos falsas alarmas
+            # que los otros, también detectaría más tarde y la comparación le
+            # perjudicaría. Así, si pierde, pierde con la ventaja a su favor.
+            for j in range(1, len(propios)):
+                umbral = _umbral_shewhart_escalon(propios, mu0, sigma, direction, j)
+                alcanzable = float(medir_arl0(lambda: fabrica(nombre)(umbral), nulas_calib).arl)
+                if alcanzable <= arl0_objetivo:
+                    break
         else:
             umbral = _calibrar_umbral_biseccion(
                 fabrica(nombre), nulas_calib, arl0_objetivo, u_min, u_max,
@@ -321,6 +434,9 @@ def calibrar_en_ruido_real(
         "umbrales": {k: round(c.umbral, 8) for k, c in calibraciones.items()},
         "arl0_alcanzable": {k: round(v, 4) for k, v in arl0_alcanzable.items()},
     }
+    # Solo si hay tramos: sin ellos la config (y su hash) queda como siempre.
+    if tramos is not None:
+        config_efectiva["tramos"] = [list(t) for t in tramos]
     return calibraciones, config_efectiva, float(clasico.arl)
 
 
@@ -335,9 +451,18 @@ def calibrar_en_ruido_real(
 # real: "tus curvas de retardo valen sobre tu ruido de juguete; ¿valen sobre
 # ruido real?". Esta es la respuesta.
 #
-# Limitación declarada: el ruido sale de remuestrear UNA historia (330
-# meses). Mide el rendimiento sobre el ruido de esa historia, no sobre ruido
-# fuera de muestra.
+# Primera versión: calibrar e inyectar remuestreaban los MISMOS 330 meses.
+# El umbral se había ajustado a ese ruido y luego se medía sobre él: no era
+# una prueba fuera de muestra (lo señaló el tutor). Ahora, con
+# `particion_tramo_meses` en la config, medir_retardo_fuera_de_muestra parte
+# la referencia en años alternos: una mitad calibra, la otra pone el ruido
+# donde se inyecta, y luego al revés. Ningún mes está en las dos. La tabla
+# dentro de muestra se conserva: es la comparación a igual tasa de falsas
+# alarmas; fuera de muestra esa igualdad se pierde (ver la función).
+#
+# Limitación que sigue en pie: A y B son dos mitades de UNA historia
+# (1963-1990). Es fuera de muestra respecto a la calibración, no respecto a
+# otra época ni a otro mercado.
 
 
 @dataclass(frozen=True)
@@ -368,21 +493,35 @@ def medir_retardo_con_inyeccion(
     n_series: int,
     bootstrap_bloque: int,
     semilla: int,
+    tramos_ruido: list[Tramo] | None = None,
+    parametros_detector: tuple[float, float] | None = None,
+    sigma_inyeccion: float | None = None,
 ) -> list[PuntoRetardo]:
     """Mide el retardo de cada detector calibrado ante caídas inyectadas.
 
     Números aleatorios comunes: TODAS las celdas (escenario × delta) usan el
     mismo ruido de fondo. Así la diferencia entre dos magnitudes es solo el
     tamaño del cambio, no la suerte de haber sacado otro ruido.
+
+    Sin argumentos opcionales, todo sale de la referencia entera (la versión
+    dentro de muestra). Para la versión fuera de muestra:
+      · tramos_ruido: de qué meses sale el ruido donde se inyecta (mitad B);
+      · parametros_detector: (mu0, sigma) con los que se calibró (mitad A):
+        el detector no sabe nada de B;
+      · sigma_inyeccion: la escala del cambio. Se deja en la sigma de la
+        referencia entera para que "0,15σ" siga siendo "el factor pasa a
+        Sharpe cero" y las tablas se puedan comparar. El tamaño del cambio
+        es la pregunta del experimento, no algo que el detector conozca.
     """
     ruido = ruido_empirico(obs_referencia)
-    mu0, sigma = ruido["mu0"], ruido["sigma"]
+    mu0, sigma = parametros_detector or (ruido["mu0"], ruido["sigma"])
+    escala = sigma_inyeccion if sigma_inyeccion is not None else sigma
     direction = obs_referencia[0].direction
     # la caída va en la dirección MALA de la métrica (lección del Bloque 2, §8.1)
     signo = -1.0 if direction == Direction.LOWER_IS_WORSE else 1.0
 
     base = series_nulas_bootstrap(
-        obs_referencia, n_series, tau + horizonte, bootstrap_bloque, semilla
+        obs_referencia, n_series, tau + horizonte, bootstrap_bloque, semilla, tramos_ruido
     )
 
     puntos: list[PuntoRetardo] = []
@@ -394,7 +533,7 @@ def medir_retardo_con_inyeccion(
             streams, verdades = [], []
             for i, serie in enumerate(base):
                 valores = np.array([o.value for o in serie], dtype=float)
-                nuevos = inyectar(valores.copy(), tau, signo * d, sigma)
+                nuevos = inyectar(valores.copy(), tau, signo * d, escala)
                 sid = f"iny_{escenario}_d{d:.2f}_r{i:04d}"
                 streams.append(
                     [
@@ -417,7 +556,7 @@ def medir_retardo_con_inyeccion(
                         detector=nombre,
                         escenario=escenario,
                         delta_sigma=float(d),
-                        delta_sharpe=float(d * sigma),
+                        delta_sharpe=float(d * escala),
                         arl1=float(r.arl),
                         arl1_ic95=tuple(float(v) for v in r.intervalo_95),
                         n_streams=int(r.n_streams),
@@ -429,6 +568,103 @@ def medir_retardo_con_inyeccion(
     return puntos
 
 
+@dataclass(frozen=True)
+class FueraDeMuestra:
+    """Todo lo que produce el experimento de retardo fuera de muestra, en
+    UNA dirección (calibrar con una mitad, inyectar en la otra)."""
+
+    direccion: str                            # "A->B" o "B->A"
+    puntos: list[PuntoRetardo]
+    calibraciones: dict[str, Calibracion]     # umbrales ajustados SOLO con la mitad que calibra
+    arl0_ruido_inyeccion: dict[str, float]    # esos umbrales, sobre ruido de la otra mitad
+    tramos_calibra: list[Tramo]
+    tramos_inyecta: list[Tramo]
+    mu0_calibra: float
+    sigma_calibra: float
+
+
+def medir_retardo_fuera_de_muestra(
+    obs_referencia: list[MetricObservation],
+    arl0_objetivo: float,
+    k_cusum: float,
+    delta_page_hinkley: float,
+    bootstrap_bloque: int,
+    bootstrap_longitud: int,
+    bootstrap_n_series: int,
+    semilla_calibracion: int,
+    semilla_verificacion: int,
+    escenarios: list[str],
+    deltas_sigma: list[float],
+    tau: int,
+    horizonte: int,
+    n_series: int,
+    semilla: int,
+    tramo_meses: int,
+    invertir: bool = False,
+) -> FueraDeMuestra:
+    """Retardo con calibración e inyección en meses DISJUNTOS.
+
+    1. Parte la referencia en tramos alternos de `tramo_meses`: A y B.
+       Sin invertir, A calibra y B pone el ruido; invirtiendo, al revés.
+       Se corren las dos direcciones: con una sola partición, cualquier
+       conclusión podría ser suerte de cómo cayeron los años.
+    2. Calibra los tres detectores al mismo ARL0 usando SOLO la mitad que
+       calibra (mu0, sigma, bisección, verificación, escalón de Shewhart).
+    3. Mide qué ARL0 tienen esos umbrales sobre ruido de la otra mitad, sin
+       cambio. Es la pregunta de un validador: ¿la tasa de falsas alarmas
+       prometida aguanta en datos que el umbral no ha visto?
+    4. Inyecta las caídas sobre ruido de la otra mitad y mide el retardo.
+
+    OJO al leer el retardo: fuera de muestra los detectores dejan de tener
+    la misma tasa de falsas alarmas (paso 3), así que sus retardos ya no se
+    comparan como una carrera. Un detector que salta a menudo "detecta"
+    pronto aunque no haya nada. El retardo se lee SIEMPRE junto a su ARL0
+    en el ruido de inyección y a las series excluidas antes de τ.
+
+    Los umbrales de producción (calibracion_<stream>.csv, 330 meses) NO
+    cambian: lo que se valida aquí es el procedimiento de calibración.
+    """
+    tramos_a, tramos_b = particion_intercalada(len(obs_referencia), tramo_meses, bootstrap_bloque)
+    calibra, inyecta = (tramos_b, tramos_a) if invertir else (tramos_a, tramos_b)
+    calib, _, _ = calibrar_en_ruido_real(
+        obs_referencia, arl0_objetivo, k_cusum, delta_page_hinkley,
+        bootstrap_bloque, bootstrap_longitud, bootstrap_n_series,
+        semilla_calibracion, semilla_verificacion, tramos=calibra,
+    )
+    ruido_c = ruido_empirico(subconjunto(obs_referencia, calibra))
+    mu0_c, sigma_c = ruido_c["mu0"], ruido_c["sigma"]
+    direction = obs_referencia[0].direction
+
+    # semilla + 1: otra extracción, distinta de la del ruido de inyección
+    nulas = series_nulas_bootstrap(
+        obs_referencia, bootstrap_n_series, bootstrap_longitud,
+        bootstrap_bloque, semilla + 1, inyecta,
+    )
+    arl0_iny = {
+        nombre: float(
+            medir_arl0(
+                lambda c=c, nombre=nombre: fabricar_detector(
+                    nombre, c.umbral, mu0_c, sigma_c, direction, k_cusum, delta_page_hinkley
+                ),
+                nulas,
+            ).arl
+        )
+        for nombre, c in calib.items()
+    }
+
+    puntos = medir_retardo_con_inyeccion(
+        obs_referencia, calib, k_cusum, delta_page_hinkley, escenarios, deltas_sigma,
+        tau, horizonte, n_series, bootstrap_bloque, semilla,
+        tramos_ruido=inyecta,
+        parametros_detector=(mu0_c, sigma_c),
+        sigma_inyeccion=ruido_empirico(obs_referencia)["sigma"],
+    )
+    return FueraDeMuestra(
+        "B->A" if invertir else "A->B", puntos, calib, arl0_iny,
+        calibra, inyecta, mu0_c, sigma_c,
+    )
+
+
 # ── Una sola serie, para el laboratorio de la app ────────────────────
 #
 # La app (app/pages/3_Factores_de_mercado.py) deja al usuario inyectar una
@@ -438,6 +674,10 @@ def medir_retardo_con_inyeccion(
 # funciones de inyección del Bloque 2, los detectores con sus umbrales ya
 # calibrados), así que lo que se ve en pantalla es un caso concreto de lo
 # que las tablas promedian sobre 1000 series.
+#
+# El laboratorio sigue remuestreando la referencia entera con los umbrales
+# de producción: es una ilustración de un caso, no una medición. Los números
+# que se defienden son los de retardo_ruido_real_<stream>.csv.
 
 
 def demo_inyeccion(

@@ -74,3 +74,10 @@ inyeccion:
   n_series: 1000
   # distinta de calibracion y verificacion (R4)
   semilla: 9900000
+  # Fuera de muestra: la referencia se parte en tramos de 12 meses alternos.
+  # Pares (A) calibran los umbrales de ESTE experimento; impares (B) ponen
+  # el ruido donde se inyecta. Ningun mes esta en las dos mitades.
+  # Alternos y no "primera mitad / segunda mitad" porque los 60 y los 80 no
+  # tienen el mismo Sharpe. 12 >= bootstrap_bloque_meses (6): un bloque
+  # siempre cabe dentro de su tramo.
+  particion_tramo_meses: 12

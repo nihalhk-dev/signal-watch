@@ -3,15 +3,23 @@
 Banco sintético: cuatro rangos de semillas (AUC y PSI × calibración y
 evaluación), disjuntos dos a dos. Rama real: en cada stream, calibración,
 verificación e inyección usan semillas distintas, y ninguna cae dentro de
-los rangos del banco sintético.
+los rangos del banco sintético. Y en HML, el retardo se mide con
+calibración e inyección en meses distintos de la referencia.
 """
 
 import importlib.util
 from itertools import combinations
 
+import numpy as np
 import pytest
 import yaml
 
+from signal_watch.evaluation.error_analysis import (
+    bloques_candidatos,
+    indices_bootstrap,
+    indices_de,
+    particion_intercalada,
+)
 from signal_watch.paths import PATHS
 
 
@@ -66,6 +74,61 @@ def test_rama_real_semillas_distintas_y_fuera_del_banco(rangos):
         for s in semillas:
             assert s not in vistas, f"{nombre} reutiliza la semilla {s} de {vistas.get(s)}"
             vistas[s] = nombre
+
+
+# ── Retardo fuera de muestra: calibración e inyección en meses disjuntos ──
+#
+# Las semillas distintas no bastan: dos semillas que remuestrean los mismos
+# 330 meses siguen viendo el mismo ruido. Estos tests comprueban la
+# separación por DATOS, a nivel de índice (qué meses de la referencia entran
+# en cada serie fabricada).
+
+N_REF, TRAMO, BLOQUE = 330, 12, 6  # los de factor_hml_sharpe
+
+
+def test_particion_disjunta_y_sin_huecos():
+    a, b = particion_intercalada(N_REF, TRAMO, BLOQUE)
+    ia, ib = set(indices_de(a)), set(indices_de(b))
+    assert not ia & ib, "un mes cae en las dos mitades"
+    assert ia | ib == set(range(N_REF)), "se ha perdido algún mes de la referencia"
+
+
+def test_el_bootstrap_de_una_mitad_no_toca_la_otra():
+    a, b = particion_intercalada(N_REF, TRAMO, BLOQUE)
+    ia = set(indices_de(a))
+    for tramos, propios in ((a, ia), (b, set(indices_de(b)))):
+        usados = set(np.concatenate(indices_bootstrap(N_REF, 200, 600, BLOQUE, 7, tramos)))
+        assert usados <= propios, "el bootstrap ha sacado meses de la otra mitad"
+
+
+def test_cobertura_uniforme_dentro_de_la_mitad():
+    """Cada mes aparece en exactamente BLOQUE bloques candidatos. Sin esto,
+    los meses del borde de cada tramo pesarían menos que los del centro y el
+    ruido fabricado no sería el de la mitad."""
+    a, _ = particion_intercalada(N_REF, TRAMO, BLOQUE)
+    cuenta = np.bincount(bloques_candidatos(a, BLOQUE).ravel(), minlength=N_REF)
+    assert set(cuenta[indices_de(a)]) == {BLOQUE}
+
+
+def test_sin_tramos_el_bootstrap_de_produccion_no_cambia():
+    """La calibración de producción (330 meses) debe salir idéntica a antes
+    de añadir la partición: mismo algoritmo, mismas llamadas al generador."""
+    rng = np.random.default_rng(9000000)
+    antes = [
+        np.concatenate([np.arange(s, s + BLOQUE)
+                        for s in rng.integers(0, N_REF - BLOQUE + 1, size=100)])[:600]
+        for _ in range(5)
+    ]
+    ahora = indices_bootstrap(N_REF, 5, 600, BLOQUE, 9000000)
+    assert all(np.array_equal(x, y) for x, y in zip(antes, ahora))
+
+
+def test_hml_mide_el_retardo_fuera_de_muestra():
+    cfg = yaml.safe_load((PATHS.configs / "streams" / "factor_hml_sharpe.yaml")
+                         .read_text(encoding="utf-8"))
+    tramo = cfg["inyeccion"].get("particion_tramo_meses")
+    assert tramo is not None, "HML ha vuelto a medir el retardo dentro de muestra"
+    assert tramo >= cfg["monitorizacion"]["bootstrap_bloque_meses"]
 
 
 def test_calibrar_con_la_misma_semilla_que_verificar_falla():
