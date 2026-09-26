@@ -3,7 +3,8 @@
 Filtros en la barra lateral (periodo, detectores, vista mensual/anual,
 suavizado) que recalculan gráficos y cifras. Cuatro pestañas:
   1. Serie y alarmas            — la serie interactiva con las alarmas encima
-  2. Retardo sobre ruido real   — la MEDICIÓN: caídas inyectadas de tamaño conocido
+  2. Retardo sobre ruido real   — la MEDICIÓN: caídas inyectadas de tamaño conocido,
+                                  y si la tasa de falsas alarmas aguanta fuera de muestra
   3. ¿Era alfa? (RQ2)           — DSR en vivo según el número de pruebas
   4. Laboratorio                — el usuario inyecta una caída; una serie o 200
 
@@ -59,6 +60,7 @@ def _referencia(sid: str):
 s = _serie(stream_id)
 alarmas = _tabla(f"alarmas_{stream_id}")
 retardo = _tabla(f"retardo_ruido_real_{stream_id}")
+fuera_muestra = _tabla(f"retardo_fuera_muestra_{stream_id}")
 dsr = _tabla(f"deflated_sharpe_{cfg['factor']}")
 f = filtros_serie(int(s.index.min().year), int(s.index.max().year), clave=stream_id)
 
@@ -139,7 +141,9 @@ with t2:
     st.markdown(
         "**La medición de la rama real.** Ruido real de la referencia + una caída de tamaño "
         f"conocido en el mes {iny['tau_meses']}; cada detector con sus umbrales ya calibrados. "
-        f"{iny['n_series']} series por punto."
+        f"{iny['n_series']} series por punto. Dentro de muestra: el ruido sale de los mismos "
+        "meses que fijaron los umbrales, así que los tres detectores comparan a igual tasa de "
+        "falsas alarmas."
     )
     a, b = st.columns([2, 1])
     esc = a.radio("Escenario", iny["escenarios"], horizontal=True, key="esc_retardo",
@@ -161,6 +165,33 @@ with t2:
                    delta_color="inverse")  # menos meses = mejor: verde si es negativo
     st.caption("0,15σ ≈ el factor pasa a Sharpe cero; 0,25σ ≈ la caída media de los 2010. Marcador "
                "hueco: >20% de series sin detectar (cota inferior). Las barras son el IC95.")
+
+    # Solo se enseña la tasa de falsas alarmas, no los retardos fuera de muestra:
+    # con tasas distintas, un detector que salta a menudo "detecta" antes aunque
+    # no haya nada, y la tabla se leería como una carrera que no es.
+    if fuera_muestra is not None:
+        st.markdown(seccion(
+            "¿Aguanta la tasa de falsas alarmas en años no vistos?",
+            "Umbrales calibrados con una mitad de 1963-1990 (años alternos) y medidos, sin "
+            "ningún cambio, sobre la otra mitad. Luego al revés."),
+            unsafe_allow_html=True)
+        arl0 = (fuera_muestra[fuera_muestra["detector"].isin(f["detectores"])]
+                .drop_duplicates(["direccion", "detector"])
+                .pivot(index="detector", columns="direccion", values="arl0_ruido_inyeccion")
+                .reindex(f["detectores"]))
+        # st.table y no st.dataframe: es HTML normal y sale también al imprimir.
+        arl0.columns = [f"Calibra {d[0]} → prueba en {d[-1]}" for d in arl0.columns]
+        arl0.index.name = "ARL0 medido (meses)"
+        st.table(arl0.map(lambda v: f"{v:.0f}"))
+        st.caption(
+            f"Prometido: ~{mon['arl0_objetivo_meses']} meses entre falsas alarmas. En años no "
+            "vistos, CUSUM y Page-Hinkley se quedan entre la mitad y el doble, en direcciones "
+            "opuestas según qué mitad calibra: depende de estimar bien el nivel de referencia. "
+            "Shewhart se desvía más, porque depende de sus pocos meses extremos. La tasa de "
+            "falsas alarmas es una estimación, no una garantía: en "
+            "producción también se vigila. Retardos fuera de muestra, con su lectura, en "
+            f"outputs/tables/retardo_fuera_muestra_{stream_id}.csv."
+        )
 
 # ── 3. RQ2 ───────────────────────────────────────────────────────────
 with t3:
