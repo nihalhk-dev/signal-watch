@@ -236,8 +236,8 @@ def main(stream_id: str = "factor_hml_sharpe") -> None:
     )
     print(f"τ = mes {iny['tau_meses']}, horizonte {iny['horizonte_meses']} meses, "
           f"{iny['n_series']} series por celda. Umbrales: los calibrados arriba.", flush=True)
-    print("DENTRO DE MUESTRA: el ruido de inyección sale de los mismos 330 meses que")
-    print("calibraron. Es la comparación a IGUAL tasa de falsas alarmas.")
+    print(f"DENTRO DE MUESTRA: el ruido de inyección sale de los mismos {len(referencia)} meses")
+    print("que calibraron. Es la comparación a IGUAL tasa de falsas alarmas.")
     puntos = medir_retardo_con_inyeccion(
         referencia, calib,
         bootstrap_bloque=int(mon["bootstrap_bloque_meses"]),
