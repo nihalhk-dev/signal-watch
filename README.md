@@ -4,7 +4,7 @@
 
 **Detección secuencial de degradación de rendimiento en modelos financieros.** Vigila la métrica
 de rendimiento de un modelo —un AUC, un PSI, un Sharpe— y decide, con una tasa de falsas alarmas
-fijada de antemano, cuándo una caída es real y no ruido. Trabajo Fin de Máster en Data Science e
+elegida de antemano, cuándo una caída es real y no ruido. Trabajo Fin de Máster en Data Science e
 Inteligencia Artificial.
 
 El contraste es con la regla de folclore que usa la industria (*"PSI > 0,25 = alarma"*), cuya tasa
@@ -23,6 +23,7 @@ de falsas alarmas nadie ha medido nunca.
 | ¿Y la regla de la industria? | **PSI > 0,25 no detecta nada**: 200/200 series censuradas en las 15 combinaciones de escenario y magnitud | idem |
 | ¿Tiene límites el CUSUM? | **Sí, y se declaran**: ante un cambio de varianza que no mueve la media, 3-sigma gana (16-20 pasos frente a 38-42) | idem |
 | ¿Se transfiere a ruido financiero real? | Sobre ruido real de HML, con una falsa alarma por década: **CUSUM 37,7 meses frente a 55,0 de la regla de una sola observación** ante la caída de los 2010 | `retardo_ruido_real_factor_hml_sharpe.csv` |
+| ¿Aguanta la tasa de falsas alarmas fuera de muestra? | **No del todo, y se mide**: calibrando con años alternos y probando en los otros, en las dos direcciones, se desvía un factor ~2 (CUSUM: 191 y 67 meses frente a 120 prometidos). Es una estimación, no una garantía | `retardo_fuera_muestra_factor_hml_sharpe.csv` |
 | ¿Era alfa de verdad? (RQ2) | **DSR 0,957** con 10 pruebas en la muestra de descubrimiento; fuera de muestra el Sharpe cae de 0,63 a 0,23 y **PSR 0,916**, ya no significativo | `deflated_sharpe_hml.csv` |
 | ¿Sirve para un modelo de ML? | Una señal de ML vigilada por el mismo monitor, sin tocarlo. Su ventaja sobre los listones **no es significativa (PSR 0,88)**, y se dice | `resumen_senal_ml_hml_sharpe.csv` |
 
@@ -43,13 +44,13 @@ python scripts/build_synthetic.py                 # banco sintético: 1,28 M obs
 python scripts/run_evaluation.py                  # curvas retardo / falsas alarmas (~40 min)
 
 python -m signal_watch.gold.factor_metrics        # stream real: Sharpe mensual de HML
-python scripts/run_monitoring.py factor_hml_sharpe        # calibración, alarmas y retardo (~3 min)
+python scripts/run_monitoring.py factor_hml_sharpe        # calibración, alarmas y retardo, dentro y fuera de muestra (~10 min)
 python -m signal_watch.evaluation.deflated_sharpe         # RQ2: PSR y DSR
 
 python -m signal_watch.gold.signal_momentum               # señal de ML (logística hacia delante)
 python scripts/run_monitoring.py senal_ml_hml_sharpe      # el mismo monitor, otro modelo
 
-python -m pytest -q                               # 121 tests + 10 fuera de alcance declarados
+python -m pytest -q                               # 126 tests + 10 fuera de alcance declarados
 streamlit run app/Home.py                         # el panel
 ```
 
@@ -69,7 +70,7 @@ src/signal_watch/
   monitoring/    el motor: recorre, alarma, reinicia y sella cada alarma
   processing/    de retornos diarios a la métrica mensual (Sharpe + SE de Lo, 2002)
 app/             el panel (Streamlit): salud de modelos, factores, banco y validación
-tests/           121 tests; 10 archivos declarados fuera de alcance con su motivo
+tests/           126 tests; 10 archivos declarados fuera de alcance con su motivo
 ```
 
 **La pieza de diseño central es el contrato.** Toda serie —sintética, un factor de mercado, una
@@ -94,7 +95,8 @@ declarado como fuera de alcance con su motivo, en vez de dejarlo vacío.
 
 ## Validación
 
-- **121 tests** sobre el código real: la muralla de τ, calibración y evaluación disjuntas (R4), el
+- **126 tests** sobre el código real: la muralla de τ, calibración y evaluación disjuntas (R4, también
+  por datos en el retardo fuera de muestra), el
   convenio del ARL, cada detector, el generador y los escenarios, el contrato en disco, el motor,
   el pipeline desde el zip crudo, la señal de ML sin fuga (placebo y fuga plantada) y el panel.
 - **Los fallos encontrados durante el proyecto tienen su test.** Se comprobó reintroduciéndolos uno
@@ -107,8 +109,9 @@ declarado como fuera de alcance con su motivo, en vez de dejarlo vacío.
 Están declaradas en [`docs/limitaciones_y_trabajo_futuro.md`](docs/limitaciones_y_trabajo_futuro.md).
 Las principales: τ fijo en el banco sintético; censura en los puntos de ARL0 más exigente; la
 validación real es sobre un factor de mercado, no sobre un modelo bancario; en datos reales no hay
-τ, así que el retardo se mide inyectando un cambio conocido sobre ruido real; y la ventaja de la
-señal de ML sobre sus listones no es estadísticamente significativa.
+τ, así que el retardo se mide inyectando un cambio conocido sobre ruido real; fuera de muestra la
+tasa de falsas alarmas se desvía un factor ~2, así que en producción también se vigila; y la ventaja
+de la señal de ML sobre sus listones no es estadísticamente significativa.
 
 ## Licencia y datos
 

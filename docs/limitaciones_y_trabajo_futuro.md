@@ -102,26 +102,56 @@ tienen volatilidad anualizada de 0,03-0,05: un Sharpe de −16,8 sale de dividir
 entre una volatilidad diminuta. Es una propiedad del cociente, no un artefacto, pero hay que
 saberlo antes de leer un valor extremo como "un mes catastrófico".
 
-**2.9 · El retardo sobre ruido real usa el ruido de una sola historia.** Las series de la inyección
-remuestrean los mismos 330 meses de referencia con los que se calibró el umbral (con otra semilla).
-Mide el rendimiento sobre el ruido de esa historia, no sobre ruido fuera de muestra.
+**2.9 · La tasa de falsas alarmas es una estimación, y fuera de muestra se desvía un factor ~2.**
+La tabla principal de retardo sobre ruido real (`retardo_ruido_real_…`) es **dentro de muestra**: la
+inyección remuestrea los mismos 330 meses con los que se calibró el umbral (con otra semilla). Es la
+comparación justa entre detectores, porque los tres tienen la misma tasa de falsas alarmas, pero no
+dice si esa tasa aguanta en datos que el umbral no ha visto.
+
+Se midió aparte (`retardo_fuera_muestra_…`): la referencia se parte en tramos de 12 meses alternos,
+se calibra con una mitad y se mide sobre la otra, en las dos direcciones. Resultado, en meses entre
+falsas alarmas (prometido: ~120):
+
+| | calibra A → prueba en B | calibra B → prueba en A |
+|---|---|---|
+| CUSUM | 191 | 67 |
+| Page-Hinkley | 214 | 72 |
+| Shewhart | 31 | 162 |
+
+Ningún umbral conserva su tasa. CUSUM y Page-Hinkley se quedan entre la mitad y el doble, y la
+dirección sigue al nivel de fondo: las dos mitades difieren en solo 0,065σ de Sharpe medio, y el
+CUSUM, hecho para notar desplazamientos pequeños de la media, lo nota. Shewhart se desvía más,
+porque su umbral lo fijan dos o tres meses extremos. Los retardos fuera de muestra **no** se comparan
+como una carrera: con tasas distintas, el detector que salta más "detecta" antes aunque no haya nada.
+
+Una primera lectura con una sola dirección sugería que el CUSUM aguantaba fuera de muestra y Shewhart
+no. **Al invertir las mitades se dio la vuelta**, y no se sostiene. La consecuencia práctica es otra:
+el umbral es una estimación y **en producción la tasa de falsas alarmas también hay que vigilarla**.
+En producción el umbral se calibra con 27 años y no con 14, así que el factor 2 debería ser el caso
+pesimista, pero eso está razonado, no medido. Y sigue siendo una sola historia: A y B son mitades de
+1963-1990, fuera de muestra respecto a la calibración, no respecto a otra época ni a otro mercado.
 
 **2.10 · La referencia 1963-1990 no es un tramo perfectamente estable.** El bootstrap la trata como
 "sin cambios", pero el Sharpe de los 60 (0,60) y el de los 70 (1,37) no son iguales. Si hubo cambios
 dentro de la referencia, la sigma sale algo inflada y los detectores algo más conservadores de lo que
 dice su ARL0.
 
-**2.11 · Shewhart se compara a ARL0 110, no 120.** Un ARL0 de 120 no es alcanzable con una regla de
-una sola observación sobre 330 valores: su probabilidad de alarma es exactamente j/330, así que su
-ARL0 solo puede valer 330, 165, 110, 82,5… Se calibra al escalón alcanzable más cercano y se declara
-en una columna. **La diferencia juega a favor de Shewhart, no en contra.**
+**2.11 · Shewhart se compara a ARL0 ≈ 107, no 120.** Una regla de una sola observación sobre 330
+valores tiene el ARL0 a saltos: el umbral solo cambia algo cuando cruza uno de esos valores, así que
+un ARL0 de 120 exacto no existe. Se toma el primer escalón que **no es más estricto** que el objetivo,
+con su ARL0 **medido** en las series de calibración (107), y se declara en una columna. **La diferencia
+juega a favor de Shewhart, no en contra.** El escalón se mide en vez de suponer la cuenta de manual
+n/j porque esa cuenta falla cuando los meses extremos son vecinos: un bloque del bootstrap que trae
+uno trae el otro y las alarmas llegan en racimo (en una mitad de la referencia, 84 sobre el papel y
+107 medido).
 
 **2.12 · Con una referencia finita, el ARL0 va a saltos en el umbral.** El bootstrap remuestrea un
 número finito de valores, así que ciertas sumas del CUSUM se repiten y el ARL0 salta de forma
 discontinua (en una prueba con datos sintéticos, de 99,5 a 129 entre h = 3,5684 y h = 3,5686). La
 bisección puede caer en el borde de un salto. No ocurrió con CUSUM ni Page-Hinkley sobre datos
-reales; sí se nota en el Shewhart de la señal de ML (+16%). `run_monitoring.py` avisa cuando un ARL0
-verificado se aleja más de un 10% del alcanzable.
+reales. En el Shewhart de la señal de ML se veía un +16%, pero era un artefacto de suponer n/j: con
+el escalón medido, su alcanzable es 111,6 y el verificado 114,7 (+3%). `run_monitoring.py` avisa
+cuando un ARL0 verificado se aleja más de un 10% del alcanzable.
 
 ---
 
@@ -177,7 +207,9 @@ falsas alarmas que una referencia corta subestima. Con ruido normal y a igual AR
 (60 frente a 81 meses).
 
 **No se ha cambiado nada para arreglarlo** —ni la referencia, ni el entrenamiento, ni el método de
-calibración—: cambiarlo tras ver el resultado sería buscar el resultado deseado. La lección de fondo
+calibración—: cambiarlo tras ver el resultado sería buscar el resultado deseado. (La regla del escalón
+de Shewhart sí cambió después, por otro motivo —ver 2.11—; se comprobó al regenerar que el umbral de
+la señal de ML sigue siendo 1,973σ y que estos números no se mueven.) La lección de fondo
 es un argumento a favor del CUSUM: la tasa de falsas alarmas de una regla de una sola observación la
 deciden los tres o cuatro meses más extremos del histórico, la parte peor estimada de cualquier
 distribución. El CUSUM depende del grueso de la distribución, no de su cola.
@@ -211,21 +243,25 @@ Por orden de lo que más aportaría:
 1. **Validar sobre un modelo bancario real.** Es la limitación 2.1 y la única que separa este
    prototipo de un caso de uso completo. El contrato `MetricObservation` ya está preparado: un
    scorecard con su AUC por cosecha entra sin tocar el monitor.
-2. **Simulación de valor económico con costes de transacción.** Traducir el retardo de detección a
+2. **Vigilar la tasa de falsas alarmas en producción y recalibrar.** La limitación 2.9 mide que un
+   umbral calibrado con 14 años se desvía un factor ~2 en otros 14. Un sistema desplegado debería
+   llevar la cuenta de sus propias alarmas frente a las esperadas y recalibrar con una regla fijada de
+   antemano, no a ojo.
+3. **Simulación de valor económico con costes de transacción.** Traducir el retardo de detección a
    dinero: cuánto cuesta cada mes de retraso en retirar un modelo degradado. Convierte una métrica
    estadística en un argumento de negocio.
-3. **Informe MRM en PDF y registro de auditoría persistente.** La evidencia de validación ya existe
+4. **Informe MRM en PDF y registro de auditoría persistente.** La evidencia de validación ya existe
    y se enseña en la app; falta el expediente exportable que un equipo de validación adjuntaría a su
    revisión, en la línea de SR 11-7.
-4. **Atribución a nivel de característica (RQ3): qué se rompió, no solo que algo se rompió.** Es la
+5. **Atribución a nivel de característica (RQ3): qué se rompió, no solo que algo se rompió.** Es la
    pregunta natural después de una alarma y la que más valor tendría para el usuario final.
-5. **BOCPD** (*Bayesian Online Changepoint Detection*) como tercer detector, para contrastar el
+6. **BOCPD** (*Bayesian Online Changepoint Detection*) como tercer detector, para contrastar el
    enfoque frecuentista con uno bayesiano que da distribución posterior del punto de cambio.
-6. **Walk-forward anidado para la señal de ML**: elegir el hiperparámetro C dentro del entrenamiento
+7. **Walk-forward anidado para la señal de ML**: elegir el hiperparámetro C dentro del entrenamiento
    de cada año, en vez de fijarlo. Es la forma legítima de ajustar sin fuga de información, y la
    razón por la que aquí no se ajustó nada.
-7. **Rama de crédito.** La ventana sin censura está decidida con datos reales (term 36,
+8. **Rama de crédito.** La ventana sin censura está decidida con datos reales (term 36,
    2007-06 → 2016-02) y documentada; falta construir el scorecard y sus streams de AUC y PSI por
    cosecha.
-8. **τ variable en el banco sintético** (limitación 1.1) y corrección de la semilla de
+9. **τ variable en el banco sintético** (limitación 1.1) y corrección de la semilla de
    `cambio_varianza` (limitación 1.7), ambas aprovechando la próxima regeneración del banco.
