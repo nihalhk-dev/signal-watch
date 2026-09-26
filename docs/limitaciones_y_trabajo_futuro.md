@@ -250,9 +250,11 @@ Por orden de lo que más aportaría:
 3. **Simulación de valor económico con costes de transacción.** Traducir el retardo de detección a
    dinero: cuánto cuesta cada mes de retraso en retirar un modelo degradado. Convierte una métrica
    estadística en un argumento de negocio.
-4. **Informe MRM en PDF y registro de auditoría persistente.** La evidencia de validación ya existe
-   y se enseña en la app; falta el expediente exportable que un equipo de validación adjuntaría a su
-   revisión, en la línea de SR 11-7.
+4. **Registro de auditoría persistente.** El expediente exportable ya existe: cada modelo de Salud de
+   modelos descarga un PDF con sus umbrales, alarmas, evidencia y limitaciones, sellado con su huella,
+   en la línea de lo que SR 11-7 pide documentar. Pero la decisión del analista (escalar, descartar,
+   seguir vigilando) se escribe y se firma en el papel, fuera de la herramienta. Falta guardarla junto
+   a la alarma que la motivó (`monitoring/audit_log.py`), para que la herramienta sepa qué se decidió.
 5. **Atribución a nivel de característica (RQ3): qué se rompió, no solo que algo se rompió.** Es la
    pregunta natural después de una alarma y la que más valor tendría para el usuario final.
 6. **BOCPD** (*Bayesian Online Changepoint Detection*) como tercer detector, para contrastar el

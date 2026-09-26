@@ -86,11 +86,14 @@ puerta de paso, con tests en las tres capas.
 
 **Dentro:** CUSUM y Page-Hinkley con calibración por simulación; banco sintético con verdad
 conocida; curvas retardo frente a falsas alarmas; validación sobre ruido real de mercado; Deflated
-Sharpe; una señal de ML vigilada; panel y evidencia de validación.
+Sharpe; una señal de ML vigilada; panel y evidencia de validación; **expediente de monitorización en
+PDF por modelo** (Salud de modelos → *Descargar expediente*), con la huella de cada tabla y un hueco
+para la decisión y la firma del analista.
 
 **Fuera, a propósito:** NLP y deep learning; API REST, base de datos y Docker; la rama de crédito
 (su ventana sin censura está decidida con datos reales, pero el scorecard no se construyó); BOCPD;
-simulación de valor económico; informe MRM en PDF. Cada archivo de test correspondiente está
+simulación de valor económico; registro de auditoría persistente (la decisión del analista se
+escribe en el expediente, fuera de la herramienta). Cada archivo de test correspondiente está
 declarado como fuera de alcance con su motivo, en vez de dejarlo vacío.
 
 ## Validación

@@ -8,7 +8,9 @@ portada y declara la navegación. La navegación se declara aquí con
 st.navigation en vez de dejar que Streamlit muestre todo lo que haya en
 pages/, porque el árbol tiene páginas fuera de alcance (crédito, valor
 económico): así el menú solo enseña lo que existe de verdad. Del informe MRM
-existe, por ahora, la parte de evidencia de pruebas (6_Informe_MRM.py).
+existen dos partes: la evidencia de pruebas (6_Informe_MRM.py, "Validación
+del sistema") y el expediente en PDF de cada modelo, que se descarga desde
+Salud de modelos (reporting/mrm_report.py).
 
 Regla de la app (R6): no calcula resultados. Todo número sale de una tabla
 sellada en outputs/tables/ o de una función de src/.

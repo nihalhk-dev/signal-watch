@@ -4,6 +4,10 @@ La lista no está escrita a mano: sale de state.session.streams_monitorizados().
 Un stream nuevo —un scorecard, una señal de ML— aparece aquí en cuanto tiene
 su YAML con bloque `monitorizacion:` y se ha corrido scripts/run_monitoring.py.
 
+Cada tarjeta ofrece el EXPEDIENTE del stream en PDF (reporting/mrm_report.py):
+la evidencia sellada y un hueco para que el analista escriba y firme su
+decisión. La página solo lee las tablas y se las pasa; no calcula nada (R6).
+
 Lo que NO hay, a propósito: un semáforo verde/ámbar/rojo. Traducir alarmas
 a un veredicto de negocio exige reglas declaradas y versionadas
 (monitoring/verdict.py en el plan), y no se han escrito. Inventarse un
@@ -16,7 +20,15 @@ import streamlit as st
 
 from components import CONFIG_PLOTLY, GRIS, TINTA, cabecera, estilo
 from components.alarm_markers import capa_alarmas
-from state.session import cargar_tabla, resumen_stream, serie, streams_monitorizados
+from signal_watch.reporting.mrm_report import expediente_pdf
+from state.session import (
+    cargar_config,
+    cargar_tabla,
+    leer_informe_tests,
+    resumen_stream,
+    serie,
+    streams_monitorizados,
+)
 
 st.markdown(cabecera(
     "Monitorización",
@@ -34,6 +46,16 @@ def _resumen(sid: str) -> dict:
 @st.cache_data
 def _serie(sid: str) -> pd.DataFrame:
     return serie(sid)
+
+
+def _expediente(sid: str) -> bytes:
+    """Sin caché, a propósito: la fecha de generación del PDF tiene que ser la real."""
+    return expediente_pdf(
+        sid, cargar_config(sid), _resumen(sid),
+        cargar_tabla(f"calibracion_{sid}"), cargar_tabla(f"alarmas_{sid}"),
+        cargar_tabla(f"retardo_ruido_real_{sid}"), cargar_tabla(f"retardo_fuera_muestra_{sid}"),
+        leer_informe_tests(),
+    )
 
 
 streams = streams_monitorizados()
@@ -127,6 +149,14 @@ for stream_id, r in resumenes.items():
                 )
             else:
                 st.markdown("Sin tabla de calibración.")
+
+        st.download_button(
+            "Descargar expediente (PDF)", data=_expediente(stream_id),
+            file_name=f"expediente_{stream_id}.pdf", mime="application/pdf",
+            icon=":material/description:", key=f"expediente_{stream_id}",
+            help="Umbrales, alarmas, evidencia y limitaciones del stream, con su huella R7, "
+                 "y un hueco para la decisión y la firma del analista. No emite veredicto.",
+        )
 
 st.caption("ARL0 = meses medios hasta una falsa alarma. Todos los detectores de un stream se calibran "
            "al mismo objetivo; el de una sola observación (Shewhart) solo alcanza escalones discretos. "
